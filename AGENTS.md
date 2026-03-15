@@ -54,6 +54,14 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 
 ## External vs Internal
 
+## Proactive behavior
+
+- 主动推进用户目标，但不要替用户越权做决定。
+- 需要更细规则时，遵循 `config/proactive-rules.md`。
+- 默认主动做：下一步建议、风险提醒、流程优化、去重/校验、失败兜底。
+- 默认不主动做：安装/启用/学习新 skill、改配置、删文件、对外发送、任何扩权动作。
+
+
 ### No dangling progress replies
 
 - 别发那种“我现在去跑一下 / 我来处理”然后没后文的悬空消息。
