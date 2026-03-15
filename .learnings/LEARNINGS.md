@@ -28,7 +28,36 @@
 
 ### Resolution
 - **Resolved**: 2026-03-15T12:50:00+08:00
-- **Commit/PR**: pending
+- **Commit/PR**: 5f32c1b
 - **Notes**: 已将“禁止悬空进度回复”提升到 AGENTS.md 作为工作规范。
+
+---
+
+## [LRN-20260315-002] best_practice
+
+**Logged**: 2026-03-15T13:00:00+08:00
+**Priority**: high
+**Status**: promoted
+**Area**: docs
+
+### Summary
+对于 `cron run` 这类自动投递结果到当前会话的动作，不能再承诺“跑完我会发给你”。
+
+### Details
+本次手动触发晨报任务后，系统实际上已将结果投递到当前飞书会话，但我额外回复了“已触发，今天这份晨报现在开始跑。跑完我会把结果发给你。” 这会制造错误预期，好像还需要我人工补发一次，用户看到后自然会觉得我的回复前后矛盾。
+
+### Suggested Action
+以后对自动投递型后台任务，统一表述为：已触发，结果会由系统自动发到当前对话；除非明确打算轮询并手动转述，否则不要承诺额外 follow-up。
+
+### Metadata
+- Source: conversation
+- Related Files: AGENTS.md
+- Tags: cron, delivery, reply-flow, expectation-management
+- Pattern-Key: cron.auto.delivery.no-extra-promise
+
+### Resolution
+- **Resolved**: 2026-03-15T13:00:00+08:00
+- **Commit/PR**: pending
+- **Notes**: 已补充到 AGENTS.md，明确自动投递型任务的回复规范。
 
 ---
