@@ -128,6 +128,16 @@ Reactions are lightweight social signals. Humans use them constantly — they sa
 
 Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.
 
+### Skill recommendation workflow
+
+- 只要涉及以下任一话题：推荐新 skill、学习 skill、评估是否值得装/学、盘点现有 skill，先看 `memory/skills-inventory.md`。
+- 先做排除，再做推荐：
+  1. 已安装且已掌握 → 排除
+  2. 已安装且已配置过类似能力 → 排除
+  3. 已明确成为默认工作流的一部分 → 排除
+- 不要把“没检索到”当成“没学过”。
+- 在没有查过 `memory/skills-inventory.md` 之前，不要给任何新增 skill shortlist。
+
 **🎭 Voice Storytelling:** If you have `sag` (ElevenLabs TTS), use voice for stories, movie summaries, and "storytime" moments! Way more engaging than walls of text. Surprise people with funny voices.
 
 **📝 Platform Formatting:**
