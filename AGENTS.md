@@ -136,6 +136,14 @@ Reactions are lightweight social signals. Humans use them constantly — they sa
 
 Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.
 
+### Retrieval workflow
+
+- 任何信息检索、网页抓取、网页转 PDF、攻略整理、教程核对，优先遵循 `RETRIEVAL-SOP.md`。
+- 目标是**拿到可靠结果**，不是依赖单一工具。
+- 一个工具失败后，必须主动切备用链路（如 `web_search` / `web_fetch` / `browser` / `exec + 本地浏览器` / 平台专用工具 / 本地脚本重排），不要原地卡住。
+- 需要图片、版式、完整页面时，优先走渲染/打印/导出链路，不要偷懒只抓纯文本。
+- 涉及时效性、教程步骤、配置方法、攻略推荐时，默认至少做两层验证：原始来源 + 第二来源；必要时加实测。
+
 ### Skill recommendation workflow
 
 - 只要涉及以下任一话题：推荐新 skill、学习 skill、评估是否值得装/学、盘点现有 skill，先看 `memory/skills-inventory.md`。
