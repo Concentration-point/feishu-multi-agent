@@ -139,10 +139,12 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 ### Retrieval workflow
 
 - 任何信息检索、网页抓取、网页转 PDF、攻略整理、教程核对，优先遵循 `RETRIEVAL-SOP.md`。
+- 晨报/晚报/热榜整理，额外遵循 `MORNING-REPORT-SOP.md`。
 - 目标是**拿到可靠结果**，不是依赖单一工具。
 - 一个工具失败后，必须主动切备用链路（如 `web_search` / `web_fetch` / `browser` / `exec + 本地浏览器` / 平台专用工具 / 本地脚本重排），不要原地卡住。
 - 需要图片、版式、完整页面时，优先走渲染/打印/导出链路，不要偷懒只抓纯文本。
 - 涉及时效性、教程步骤、配置方法、攻略推荐时，默认至少做两层验证：原始来源 + 第二来源；必要时加实测。
+- 热榜原榜抓不到时，允许降级为“搜索恢复版”或“人话替代版”，但必须明确标注，不准伪装成原榜。
 
 ### Skill recommendation workflow
 
