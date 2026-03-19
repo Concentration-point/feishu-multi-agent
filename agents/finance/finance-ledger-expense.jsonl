@@ -1,1 +1,2 @@
 {"_meta":"finance expense ledger initialized","version":"v1"}
+{"id":"expense-2026-03-19-1050-telecom-4938","date":"2026-03-19","time":"10:50","merchant":"江苏电信 50元话费","amount":49.38,"direction":"expense","category":"通讯/话费充值","channel":"工商银行储蓄卡(0047)","note":"原订单金额50.00，工商银行立减金0.62","source_type":"screenshot","confidence":"high","confirmed":true,"raw_ref":"02cd68c9-c1e8-48e6-9ef5-15d60bd10c28.jpg","created_at":"2026-03-19T10:52:20+08:00"}
