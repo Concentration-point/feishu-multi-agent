@@ -1,3 +1,10 @@
+﻿.venv_asr/
+tools/ffmpeg/
 __pycache__/
 *.pyc
 tmp_demo/
+real_demo/
+audio_tmp/
+transcripts/
+docs/
+mindmaps/
