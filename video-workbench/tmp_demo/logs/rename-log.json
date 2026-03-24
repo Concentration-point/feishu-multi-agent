@@ -1,0 +1,15 @@
+{
+  "status": "ok",
+  "directory": "C:\\Users\\25723\\.openclaw\\workspace\\video-workbench\\tmp_demo",
+  "rule": "{mtime_date}_{index}_{stem}",
+  "renamed": [
+    {
+      "old": "a.mp4",
+      "new": "2026-03-24_01_a.mp4"
+    },
+    {
+      "old": "b.mov",
+      "new": "2026-03-24_02_b.mov"
+    }
+  ]
+}
