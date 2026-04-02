@@ -1,0 +1,10 @@
+{
+  "task_id": "example-2026-04-02-morning-report",
+  "kind": "morning_report",
+  "status": "running",
+  "stage": "fetch_hotlists",
+  "last_action": "zhihu source returned garbled text",
+  "next_action": "fallback to search recovery",
+  "artifacts": [],
+  "updated_at": "2026-04-02T07:18:00+08:00"
+}
