@@ -47,6 +47,22 @@ def init_db():
             )
             '''
         )
+        conn.execute(
+            '''
+            CREATE TABLE IF NOT EXISTS registration_tasks (
+                id TEXT PRIMARY KEY,
+                email TEXT,
+                mail_token TEXT,
+                provider TEXT NOT NULL,
+                status TEXT NOT NULL,
+                stage TEXT,
+                error_code TEXT,
+                detail TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            '''
+        )
 
 
 def write_json(path: Path, payload: dict):
