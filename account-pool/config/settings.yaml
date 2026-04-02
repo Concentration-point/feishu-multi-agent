@@ -1,0 +1,15 @@
+db_path: ./data/accounts.db
+runtime_dir: ./runtime
+accounts_dir: ./data/accounts
+snapshots_dir: ./data/snapshots
+logs_dir: ./logs
+
+auto_switch: true
+max_failures_before_cooling: 2
+cooling_minutes: 30
+healthcheck_timeout_seconds: 15
+
+providers:
+  - openai
+
+default_provider: openai

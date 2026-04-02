@@ -1,0 +1,11 @@
+status_thresholds:
+  max_failures_before_limited: 1
+  max_failures_before_cooling: 2
+  max_failures_before_dead: 5
+
+cooling:
+  default_minutes: 30
+
+selection:
+  avoid_recently_failed_minutes: 60
+  prefer_recent_success: true

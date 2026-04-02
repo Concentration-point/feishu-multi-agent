@@ -1,0 +1,13 @@
+targets:
+  codex:
+    enabled: true
+    runtime_auth_file: ./runtime/current_auth.json
+    runtime_account_meta: ./runtime/current_account.json
+  openclaw:
+    enabled: true
+    runtime_auth_file: ./runtime/current_auth.json
+    runtime_account_meta: ./runtime/current_account.json
+  cpa:
+    enabled: true
+    runtime_auth_file: ./runtime/current_auth.json
+    runtime_account_meta: ./runtime/current_account.json
