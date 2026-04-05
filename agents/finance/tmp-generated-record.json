@@ -1,0 +1,16 @@
+{
+  "id": "expense-2026-04-05-1045-执行器生成测试-2",
+  "date": "2026-04-05",
+  "time": "10:45",
+  "merchant": "执行器生成测试",
+  "amount": 0.02,
+  "direction": "expense",
+  "category": "系统测试",
+  "channel": "local-test",
+  "note": "record 模板生成器烟雾测试",
+  "source_type": "manual",
+  "confidence": "high",
+  "confirmed": true,
+  "raw_ref": "local:make-record-smoketest",
+  "created_at": "2026-04-05T10:45:49+08:00"
+}

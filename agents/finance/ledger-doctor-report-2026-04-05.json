@@ -1,0 +1,15 @@
+{
+  "generated_at": "2026-04-05T10:46:00+08:00",
+  "summary": {
+    "ledger": "agents/finance/finance-ledger-expense.jsonl",
+    "total_lines": 32,
+    "invalid_json_lines": 0,
+    "duplicate_ids": 0,
+    "suspicious_rows": 19
+  },
+  "notes": [
+    "suspicious_rows mainly indicate historical mojibake / replacement-character corruption in text fields.",
+    "Current executor path appears healthy for newly appended UTF-8 rows.",
+    "This report is audit-only and does not mutate historical rows."
+  ]
+}

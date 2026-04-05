@@ -63,6 +63,34 @@ python agents/finance/ledger_append.py --ledger token --record-file path/to/toke
 - 追加后立即回读
 - 若回读找不到 / 内容不一致 / JSON 损坏，直接判失败
 
+## 配套工具
+### 1) record 生成器
+```bash
+python agents/finance/ledger_make_record.py \
+  --output agents/finance/tmp-record.json \
+  --date 2026-04-05 \
+  --time 18:36 \
+  --merchant "乡村基（南京宜悦里店）" \
+  --amount 19.50 \
+  --category "餐饮/外卖" \
+  --channel "外卖订单页" \
+  --note "用户主动发送金额图，按已确认消费入账。" \
+  --source-type "screenshot+user_confirmation" \
+  --confidence high \
+  --confirmed true \
+  --raw-ref "feishu:om_xxx"
+```
+
+### 2) ledger 体检器
+```bash
+python agents/finance/ledger_doctor.py --ledger expense
+```
+作用：
+- 扫坏行
+- 扫重复 id
+- 扫历史乱码/可疑文本行
+- 只审计，不改账
+
 ## 当前限制
 - 只做最小执行，不负责 OCR、分类推断、截图解析
 - 不自动修复历史乱码记录
