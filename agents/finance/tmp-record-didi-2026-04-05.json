@@ -1,0 +1,16 @@
+{
+  "id": "expense-2026-04-05-2006-didi-1340",
+  "date": "2026-04-05",
+  "time": "20:06",
+  "merchant": "滴滴出行｜特惠快车",
+  "amount": 13.4,
+  "direction": "expense",
+  "category": "交通/打车",
+  "channel": "滴滴行程单",
+  "note": "费用明细页；优惠5.80，里程7.49公里，时长18分钟，起点玄武招商花园城-1号门，终点迪卡侬（鼓楼店）。",
+  "source_type": "screenshot+user_confirmation",
+  "confidence": "high",
+  "confirmed": true,
+  "raw_ref": "feishu:om_x100b52117a6434bcc11b0deaf3c0d40",
+  "created_at": "2026-04-05T20:20:16+08:00"
+}
