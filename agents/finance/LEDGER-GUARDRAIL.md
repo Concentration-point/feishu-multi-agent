@@ -38,5 +38,16 @@
 - 若聊天里已出现“可直接记 / 已确认消费”，但账本缺失对应记录，完整性检查必须告警
 - 汇总任务禁止把“漏记”误写成“今日无新增”
 
+## 执行入口
+正式落账默认走：
+- `python agents/finance/ledger_append.py --ledger expense --record-file <record.json>`
+- `python agents/finance/ledger_append.py --ledger token --record-file <record.json>`
+
+执行器职责：
+- 校验字段完整性
+- 按 UTF-8 追加 JSONL
+- 立即回读核对 `id`
+- 任一步失败即返回失败，不得嘴上算成功
+
 ## 一句话
 **先落盘，再说话。**
