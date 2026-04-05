@@ -1,0 +1,749 @@
+{
+  "generated_at": "2026-04-05T10:57:00+08:00",
+  "mode": "non_destructive_plan_only",
+  "ledger": "C:\\Users\\25723\\.openclaw\\workspace\\agents\\finance\\finance-ledger-expense.jsonl",
+  "suspicious_count": 19,
+  "plan": [
+    {
+      "line": 8,
+      "id": "expense-2026-03-21-1203-njupt-1250",
+      "raw_record": {
+        "id": "expense-2026-03-21-1203-njupt-1250",
+        "date": "2026-03-21",
+        "time": "12:03:34",
+        "merchant": "??????",
+        "amount": 12.5,
+        "direction": "expense",
+        "category": "??/????",
+        "channel": "???/????",
+        "note": "???????13.00????????0.50",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "fa68d757-ccf1-483e-aa30-159f1d41996b.jpg",
+        "created_at": "2026-03-21T12:03:34+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-21",
+        "time": "12:03:34",
+        "amount": 12.5
+      },
+      "hints": {
+        "date_hint": "2026-03-21",
+        "merchant_hint": "1203-njupt",
+        "amount_hint": 12.5
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 9,
+      "id": "expense-2026-03-21-1401-xianyu-100",
+      "raw_record": {
+        "id": "expense-2026-03-21-1401-xianyu-100",
+        "date": "2026-03-21",
+        "time": "14:01:32",
+        "merchant": "????????????",
+        "amount": 1.0,
+        "direction": "expense",
+        "category": "????/?????",
+        "channel": "???",
+        "note": "????????",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "c1ecdc5b-70d9-4641-aed9-8e380e121436.jpg",
+        "created_at": "2026-03-21T14:01:32+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-21",
+        "time": "14:01:32",
+        "amount": 1.0
+      },
+      "hints": {
+        "date_hint": "2026-03-21",
+        "merchant_hint": "1401-xianyu",
+        "amount_hint": 1.0
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 10,
+      "id": "expense-2026-03-21-1437-kefu-2990",
+      "raw_record": {
+        "id": "expense-2026-03-21-1437-kefu-2990",
+        "date": "2026-03-21",
+        "time": "14:37:39",
+        "merchant": "?????????",
+        "amount": 29.9,
+        "direction": "expense",
+        "category": "????/????",
+        "channel": "????",
+        "note": "?????????????2?????????????????????????10.00",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "cc539d06-a86d-46f8-9029-4dd7c644f3d7.jpg",
+        "created_at": "2026-03-21T14:38:30+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-21",
+        "time": "14:37:39",
+        "amount": 29.9
+      },
+      "hints": {
+        "date_hint": "2026-03-21",
+        "merchant_hint": "1437-kefu",
+        "amount_hint": 29.9
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 11,
+      "id": "expense-2026-03-21-1820-xiangcunji-1330",
+      "raw_record": {
+        "id": "expense-2026-03-21-1820-xiangcunji-1330",
+        "date": "2026-03-21",
+        "time": "18:20:21",
+        "merchant": "???",
+        "amount": 13.3,
+        "direction": "expense",
+        "category": "??/??",
+        "channel": "????",
+        "note": "????????????????????????",
+        "source_type": "screenshot+user_confirmation",
+        "confidence": "medium",
+        "confirmed": true,
+        "raw_ref": "a0f41536-98b2-4375-9788-8055d14e1361.jpg",
+        "created_at": "2026-03-21T18:20:21+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-21",
+        "time": "18:20:21",
+        "amount": 13.3
+      },
+      "hints": {
+        "date_hint": "2026-03-21",
+        "merchant_hint": "1820-xiangcunji",
+        "amount_hint": 13.3
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 12,
+      "id": "expense-2026-03-21-1856-tastien-2240",
+      "raw_record": {
+        "id": "expense-2026-03-21-1856-tastien-2240",
+        "date": "2026-03-21",
+        "time": "18:56:07",
+        "merchant": "???????? ????",
+        "amount": 22.4,
+        "direction": "expense",
+        "category": "??/??",
+        "channel": "????",
+        "note": "??/?????????45.8??12??????????????",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "864b5d32-1eeb-421a-a031-f139808aa141.jpg",
+        "created_at": "2026-03-21T18:56:07+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-21",
+        "time": "18:56:07",
+        "amount": 22.4
+      },
+      "hints": {
+        "date_hint": "2026-03-21",
+        "merchant_hint": "1856-tastien",
+        "amount_hint": 22.4
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 15,
+      "id": "expense-2026-03-23-1200-njupt-1500",
+      "raw_record": {
+        "id": "expense-2026-03-23-1200-njupt-1500",
+        "date": "2026-03-23",
+        "time": "12:00",
+        "merchant": "�Ͼ��ʵ��ѧ",
+        "amount": 15.0,
+        "direction": "expense",
+        "category": "����/ʳ��",
+        "channel": "У��֧��",
+        "note": "�û�������ȷ����������ϵĶ�������ʳ�óԷ����ñʶ�Ӧ����ʳ�����ѡ�",
+        "source_type": "screenshot+user_confirmation",
+        "confidence": "medium",
+        "confirmed": true,
+        "raw_ref": "om_x100b53385a8dd0a4c32f678198f14d5",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-23",
+        "time": "12:00",
+        "amount": 15.0
+      },
+      "hints": {
+        "date_hint": "2026-03-23",
+        "merchant_hint": "1200-njupt",
+        "amount_hint": 15.0
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 16,
+      "id": "expense-2026-03-23-1800-njupt-1600",
+      "raw_record": {
+        "id": "expense-2026-03-23-1800-njupt-1600",
+        "date": "2026-03-23",
+        "time": "18:00",
+        "merchant": "�Ͼ��ʵ��ѧ",
+        "amount": 16.0,
+        "direction": "expense",
+        "category": "����/ʳ��",
+        "channel": "У��֧��",
+        "note": "�û�������ȷ�����϶���Ϊʳ�ö�����ͼƬ��������ȷ�Ͻ��16.00��",
+        "source_type": "screenshot+user_confirmation",
+        "confidence": "medium",
+        "confirmed": true,
+        "raw_ref": "om_x100b532174f9a8a8c39dc017fcf6bec",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-23",
+        "time": "18:00",
+        "amount": 16.0
+      },
+      "hints": {
+        "date_hint": "2026-03-23",
+        "merchant_hint": "1800-njupt",
+        "amount_hint": 16.0
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 17,
+      "id": "expense-2026-03-24-1133-junfei-1680",
+      "raw_record": {
+        "id": "expense-2026-03-24-1133-junfei-1680",
+        "date": "2026-03-24",
+        "time": "11:33:56",
+        "merchant": "ģ����·���ɸǽ���",
+        "amount": 16.8,
+        "direction": "expense",
+        "category": "����/�緹",
+        "channel": "����",
+        "note": "֧���ɹ������������������緹�ھ���",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "om_x100b53142c8f6cacb276c56d8d59a1e",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-24",
+        "time": "11:33:56",
+        "amount": 16.8
+      },
+      "hints": {
+        "date_hint": "2026-03-24",
+        "merchant_hint": "1133-junfei",
+        "amount_hint": 16.8
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 18,
+      "id": "expense-2026-03-24-1912-laoxiangji-4400",
+      "raw_record": {
+        "id": "expense-2026-03-24-1912-laoxiangji-4400",
+        "date": "2026-03-24",
+        "time": "19:12:57",
+        "merchant": "���缦",
+        "amount": 44.0,
+        "direction": "expense",
+        "category": "����/����",
+        "channel": "�����Ѹ���",
+        "note": "�û�����ȷ�ϣ�������ͣ����缦��44�������Ϳھ���ʽ��¼��",
+        "source_type": "screenshot+user_confirmation",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "om_x100b53135540cca8c2b2187274f8503",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-24",
+        "time": "19:12:57",
+        "amount": 44.0
+      },
+      "hints": {
+        "date_hint": "2026-03-24",
+        "merchant_hint": "1912-laoxiangji",
+        "amount_hint": 44.0
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 19,
+      "id": "expense-2026-03-25-0021-orientalleaf-1790",
+      "raw_record": {
+        "id": "expense-2026-03-25-0021-orientalleaf-1790",
+        "date": "2026-03-25",
+        "time": "00:21:22",
+        "merchant": "ũ��ɽȪ������Ҷ 500ml��8",
+        "amount": 17.9,
+        "direction": "expense",
+        "category": "����/����",
+        "channel": "�����Ѹ���",
+        "note": "��������У���ʱ���ж��ɼ��ˣ��û��ɰ��¹���ֱ�Ӽǡ�",
+        "source_type": "screenshot",
+        "confidence": "medium",
+        "confirmed": true,
+        "raw_ref": "om_x100b531feeeb54a0c4d1238b7a9c061",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-25",
+        "time": "00:21:22",
+        "amount": 17.9
+      },
+      "hints": {
+        "date_hint": "2026-03-25",
+        "merchant_hint": "0021-orientalleaf",
+        "amount_hint": 17.9
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 20,
+      "id": "expense-2026-03-26-1228-njupt-1480",
+      "raw_record": {
+        "id": "expense-2026-03-26-1228-njupt-1480",
+        "date": "2026-03-26",
+        "time": "12:28:46",
+        "merchant": "�Ͼ��ʵ��ѧ",
+        "amount": 14.8,
+        "direction": "expense",
+        "category": "����/У԰����",
+        "channel": "��Ǯ+�������",
+        "note": "֧���ɹ�������ȷҪ�����������ֱ�����ˡ�",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "om_x100b537876d2b0b0c4ea631276a6493",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-26",
+        "time": "12:28:46",
+        "amount": 14.8
+      },
+      "hints": {
+        "date_hint": "2026-03-26",
+        "merchant_hint": "1228-njupt",
+        "amount_hint": 14.8
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 21,
+      "id": "expense-2026-03-26-1808-hulailong-2681",
+      "raw_record": {
+        "id": "expense-2026-03-26-1808-hulailong-2681",
+        "date": "2026-03-26",
+        "time": "18:08:28",
+        "merchant": "�Ͼ��й�¥����������⽵�",
+        "amount": 26.81,
+        "direction": "expense",
+        "category": "����",
+        "channel": "ũҵ���д��(1271)",
+        "note": "ԭ��29.00������2.19��",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "om_x100b5364170e509cb3f18d22696d091",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-26",
+        "time": "18:08:28",
+        "amount": 26.81
+      },
+      "hints": {
+        "date_hint": "2026-03-26",
+        "merchant_hint": "1808-hulailong",
+        "amount_hint": 26.81
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 22,
+      "id": "expense-2026-03-27-pdd-yogurt-2490",
+      "raw_record": {
+        "id": "expense-2026-03-27-pdd-yogurt-2490",
+        "date": "2026-03-27",
+        "time": "",
+        "merchant": "ƴ������̶��������ֱ�������������",
+        "amount": 24.9,
+        "direction": "expense",
+        "category": "ʳƷ/����",
+        "channel": "ƴ��ඩ��ҳ",
+        "note": "�û�������ȷ�����������Ľ���������Ĭ��ֱ�Ӽ��ˣ��ñʰ���ȷ�����Ѳ�¼��",
+        "source_type": "screenshot+user_confirmation",
+        "confidence": "medium",
+        "confirmed": true,
+        "raw_ref": "om_x100b5362a0fed4b4c32c44fd5ce7858",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-27",
+        "time": "",
+        "amount": 24.9
+      },
+      "hints": {
+        "date_hint": "2026-03-27",
+        "merchant_hint": "pdd-yogurt",
+        "amount_hint": 24.9
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 23,
+      "id": "expense-2026-03-28-1345-qieguonow-4059",
+      "raw_record": {
+        "id": "expense-2026-03-28-1345-qieguonow-4059",
+        "date": "2026-03-28",
+        "time": "13:45:02",
+        "merchant": "�й�NOW�������ŵ꣩",
+        "amount": 40.59,
+        "direction": "expense",
+        "category": "����/ˮ��",
+        "channel": "����������֧��",
+        "note": "���������������ٻ���ʿ���ʹ�����������¥У������������",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "om_x100b5342e313a8a0c33aa45f896316a",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-28",
+        "time": "13:45:02",
+        "amount": 40.59
+      },
+      "hints": {
+        "date_hint": "2026-03-28",
+        "merchant_hint": "1345-qieguonow",
+        "amount_hint": 40.59
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 24,
+      "id": "expense-2026-03-28-1223-anqingxiaochidian-814",
+      "raw_record": {
+        "id": "expense-2026-03-28-1223-anqingxiaochidian-814",
+        "date": "2026-03-28",
+        "time": "12:23",
+        "merchant": "����С�Ե�",
+        "amount": 8.14,
+        "direction": "expense",
+        "category": "����",
+        "channel": "֧���ɹ�",
+        "note": "ͬ���֮һ�����ϴ�Ҫ����ʼǡ�",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "om_x100b5342fcf350a8c4901e4261a87bb",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-28",
+        "time": "12:23",
+        "amount": 8.14
+      },
+      "hints": {
+        "date_hint": "2026-03-28",
+        "merchant_hint": "1223-anqingxiaochidian",
+        "amount_hint": 8.14
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 25,
+      "id": "expense-2026-03-28-1223-anqingxiaochidian-1700",
+      "raw_record": {
+        "id": "expense-2026-03-28-1223-anqingxiaochidian-1700",
+        "date": "2026-03-28",
+        "time": "12:23",
+        "merchant": "����С�Ե�",
+        "amount": 17.0,
+        "direction": "expense",
+        "category": "����",
+        "channel": "֧���ɹ�",
+        "note": "ͬ���֮һ�����ϴ�Ҫ����ʼǡ�",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "om_x100b5342fcf350a8c4901e4261a87bb",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-28",
+        "time": "12:23",
+        "amount": 17.0
+      },
+      "hints": {
+        "date_hint": "2026-03-28",
+        "merchant_hint": "1223-anqingxiaochidian",
+        "amount_hint": 17.0
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 26,
+      "id": "expense-2026-03-28-mcd-coupon-3761",
+      "raw_record": {
+        "id": "expense-2026-03-28-mcd-coupon-3761",
+        "date": "2026-03-28",
+        "time": "18:11:40",
+        "merchant": "���ʹ��µ��Żݵ���ȯ",
+        "amount": 37.61,
+        "direction": "expense",
+        "category": "����/�Ż�ȯ",
+        "channel": "�Ա�����ҳ",
+        "note": "�ѷ�������ҳ��ʵ����37.61�����㵱ǰ�ھ���ֱ�Ӽ��ˡ�",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "om_x100b534edb0d5ca0b21a4c047208ea0",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-28",
+        "time": "18:11:40",
+        "amount": 37.61
+      },
+      "hints": {
+        "date_hint": "2026-03-28",
+        "merchant_hint": "mcd-coupon",
+        "amount_hint": 37.61
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 27,
+      "id": "expense-2026-03-28-hotel-16500",
+      "raw_record": {
+        "id": "expense-2026-03-28-hotel-16500",
+        "date": "2026-03-28",
+        "time": "20:43:36",
+        "merchant": "�Ƶ귿��",
+        "amount": 165.0,
+        "direction": "expense",
+        "category": "ס��/�Ƶ�",
+        "channel": "����֧��",
+        "note": "�Ƶ�Ԥ���ɹ�����ס����2026-03-29��ԭ��362���Żݺϼ�197��ʵ��165��",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "om_x100b5348814c84a8c32c27fd3c5d94f",
+        "created_at": "2026-03-29T11:06:00+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-03-28",
+        "time": "20:43:36",
+        "amount": 165.0
+      },
+      "hints": {
+        "date_hint": "2026-03-28",
+        "merchant_hint": "hotel",
+        "amount_hint": 165.0
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "medium",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    },
+    {
+      "line": 28,
+      "id": "exp_2026-04-03_121506_junfei_gaijiaofan_3525",
+      "raw_record": {
+        "id": "exp_2026-04-03_121506_junfei_gaijiaofan_3525",
+        "date": "2026-04-03",
+        "time": "12:15",
+        "merchant": "ģ����·���ɸǽ���",
+        "amount": 35.25,
+        "direction": "expense",
+        "category": "����",
+        "channel": "����",
+        "note": "�������36.00������������0.75��ʵ��35.25",
+        "source_type": "screenshot",
+        "confidence": "high",
+        "confirmed": true,
+        "raw_ref": "feishu:om_x100b53c7b8dee0a4c4d8f463fd61718",
+        "created_at": "2026-04-03T12:18:26+08:00"
+      },
+      "repair_strategy": "manual_or_context_rebuild",
+      "recoverable_fields": {
+        "date": "2026-04-03",
+        "time": "12:15",
+        "amount": 35.25
+      },
+      "hints": {
+        "date_hint": null,
+        "merchant_hint": null,
+        "amount_hint": null
+      },
+      "needs": [
+        "merchant",
+        "category",
+        "channel",
+        "note"
+      ],
+      "confidence": "low",
+      "suggestion": "优先按 raw_ref 回查原消息/原图；若拿不到，再根据 id hint + 上下文人工补录。"
+    }
+  ]
+}
