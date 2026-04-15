@@ -89,5 +89,10 @@ builder 不是聊天人格，它是**汇总执行器**。
 - supervisor 再决定如何表达
 - supervisor 不得跳过 builder 直接拍脑袋写正式复盘
 
+## 当前实现状态
+- 本地已提供脚手架执行器：`finance_summary_builder.py`
+- 当前脚手架负责：日期校验、summary JSON 契约校验、sendable 判断、可渲染摘要生成、草稿数字校验
+- 飞书实际查询仍由 assistant/tool 层完成；builder 脚本当前不直接请求飞书 API
+
 ## 一句话
 **builder 先算账，supervisor 再开口。**
