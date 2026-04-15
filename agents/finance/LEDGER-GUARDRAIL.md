@@ -43,11 +43,22 @@
 - `python agents/finance/ledger_append.py --ledger expense --record-file <record.json>`
 - `python agents/finance/ledger_append.py --ledger token --record-file <record.json>`
 
+发送前核账默认分两类：
+- 本地 JSONL 守卫：`python agents/finance/verify_report_guard.py --date <YYYY-MM-DD>`
+- 飞书主账本守卫准备器：`python agents/finance/verify_bitable_guard.py --date <YYYY-MM-DD>`
+- 若要校验草稿文案（本地账本场景）：`python agents/finance/verify_report_guard.py --date <YYYY-MM-DD> --report-file <draft.md> --must-include-counts`
+
 执行器职责：
 - 校验字段完整性
 - 按 UTF-8 追加 JSONL
 - 立即回读核对 `id`
 - 任一步失败即返回失败，不得嘴上算成功
+
+核账守卫职责：
+- 从正式账本计算记录数 / 已入账数 / 待确认数 / 异常数 / 总金额
+- 若传入草稿文案，检查是否缺少核心数字
+- 拦截“账本空白 / 漏记 / 明天补账 / 未落实”等与账本现状冲突的陈旧状态词
+- 若无正式记录，拦截“已记 / 已入账 / 已落实 / 已补完”等确定性表述
 
 ## 一句话
 **先落盘，再说话。**
