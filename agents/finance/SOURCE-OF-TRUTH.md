@@ -85,5 +85,8 @@ finance supervisor 在输出前必须先确认：
 
 答不清，就不准发。
 
+## builder 约束
+正式 finance 汇总与复盘，后续默认应先经过 `finance-summary-builder-spec.md` 定义的 builder 结构化输出，再由 supervisor 决定如何表达。
+
 ## 一句话
 **飞书说了算，本地文件别抢戏。**

@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "source_of_truth": "feishu_bitable",
+  "date": "2026-04-14",
+  "summary": {
+    "record_count": 37,
+    "booked_count": 37,
+    "pending_count": 0,
+    "abnormal_count": 0,
+    "total_amount": 584.19
+  },
+  "sendable": true,
+  "status": "ok",
+  "reason": "formal_ledger_has_records_and_core_counts_are_ready",
+  "renderable_summary": "昨日已记录 37 笔｜已入账 37｜待确认 0｜异常 0｜总支出 ¥584.19。"
+}

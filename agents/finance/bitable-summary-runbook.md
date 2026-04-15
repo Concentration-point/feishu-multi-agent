@@ -8,6 +8,11 @@
 - table_id: `tblX8Jop5niKoOK9`
 
 ## 标准动作
+### 0. 优先走 builder 规范
+正式 finance 汇总优先遵循：
+- `finance-summary-builder-spec.md`
+- `finance-summary-builder-example.json`
+
 ### 1. 准备查询参数
 先运行：
 ```bash
