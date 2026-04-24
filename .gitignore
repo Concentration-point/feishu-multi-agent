@@ -1,0 +1,39 @@
+﻿.env
+.env.*
+!.env.example
+
+.claude/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+
+.DS_Store
+Thumbs.db
+*.log
+
+.vscode/
+.idea/
+
+# React dashboard
+node_modules/
+
+# Runtime data
+runs/
+knowledge/.sync_state.json
+
+# 分批提交计划（开发期脚手架，不入历史）
+COMMIT_PLAN.md
