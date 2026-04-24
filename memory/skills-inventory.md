@@ -26,6 +26,7 @@
 | Multi-Search-Engine | 已会用 | 不应再重复推荐 | 多搜索源检索 |
 | skill-vetter | 已学过 | 不应再作为“可能没学过”推荐 | 审查 skill 风险 |
 | Agent-Browser | 已学过 | 不应再作为待补能力推荐 | 浏览器自动化 |
+| markitdown | 已安装 / 已可用 | 已完成最小可用安装并验证 `markitdown --help` 成功 | PDF / DOCX / PPTX / XLSX 转 Markdown |
 
 ## B. 已安装，但能力与现有配置重复 / 相近
 
@@ -40,7 +41,7 @@
 |---|---|---|---|
 | agent-skills | 已学习 / 已吸收方法论 | 已吸收 Spec → Plan → Build → Verify → Review → Ship 骨架，并固化到 `CODING-SOP.md` | 默认用于 coding / debug / 配置排障 / 部署修复 |
 | claude-mem | 已研究 / 已吸收设计思想 | 已吸收自动记忆、分层检索、渐进披露、语义召回思路 | 评估是否与现有 OpenClaw 记忆机制接入或部分借鉴 |
-| markitdown | 已研究 / 已吸收设计思想 | 已吸收“统一内容摄入为 Markdown”“窄口调用减少风险”的思路 | 评估是否作为资料处理底层工具接入 |
+| markitdown（方法层） | 已研究 / 已吸收设计思想 | 已吸收“统一内容摄入为 Markdown”“窄口调用减少风险”的思路 | 已结合本地安装纳入 `RETRIEVAL-SOP.md` |
 
 ## D. 新增 skill 推荐前检查清单
 
@@ -61,6 +62,7 @@
 | Skill / 方向 | 状态 | 风险提示 |
 |---|---|---|
 | healthcheck | 待确认 | 可能涉及主机检查、系统配置、安全姿态，默认只可做评估与提案 |
+| claude-mem（系统级接入） | 待确认 | 与现有 OpenClaw 记忆链路可能重叠，需先做接入方案与冲突评估 |
 
 ## F. 与主动规则的关系
 
