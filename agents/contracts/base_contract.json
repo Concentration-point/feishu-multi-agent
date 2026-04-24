@@ -1,0 +1,18 @@
+{
+  "role_id": "<role_id>",
+  "record_id": "<project_record_id>",
+  "status": "success",
+  "version": "v1",
+  "output": {},
+  "handoff": {
+    "next_role": "<next_role_or_null>",
+    "ready": true,
+    "blocking_issues": []
+  },
+  "meta": {
+    "started_at": "2026-04-15T23:00:00+08:00",
+    "finished_at": "2026-04-15T23:02:10+08:00",
+    "tool_calls": 0,
+    "notes": []
+  }
+}

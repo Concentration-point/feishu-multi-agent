@@ -1,0 +1,30 @@
+{
+  "role_id": "copywriter",
+  "record_id": "rec_xxx",
+  "status": "success",
+  "version": "v1",
+  "output": {
+    "drafted_items": [
+      {
+        "content_record_id": "rec_content_1",
+        "title": "双十一预热主张",
+        "draft_ready": true,
+        "word_count": 312,
+        "platform": "小红书"
+      }
+    ],
+    "draft_count": 10,
+    "missing_items": []
+  },
+  "handoff": {
+    "next_role": "reviewer",
+    "ready": true,
+    "blocking_issues": []
+  },
+  "meta": {
+    "started_at": "2026-04-15T23:08:00+08:00",
+    "finished_at": "2026-04-15T23:16:00+08:00",
+    "tool_calls": 8,
+    "notes": []
+  }
+}

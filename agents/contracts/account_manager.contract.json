@@ -1,0 +1,38 @@
+{
+  "role_id": "account_manager",
+  "record_id": "rec_xxx",
+  "status": "success",
+  "version": "v1",
+  "output": {
+    "client_name": "某品牌",
+    "project_type": "双十一电商营销",
+    "brief_summary": "客户希望围绕双十一做一轮整合内容营销。",
+    "campaign_goal": "提升大促预热声量与转化效率",
+    "target_audience": [
+      "18-30岁女性消费者",
+      "关注护肤和彩妆的人群"
+    ],
+    "core_requirements": [
+      "突出大促节奏",
+      "强调品牌专业感"
+    ],
+    "constraints": [
+      "避免绝对化表达",
+      "避免过度低价叫卖"
+    ],
+    "risks": [
+      "促销规则描述不完整"
+    ]
+  },
+  "handoff": {
+    "next_role": "strategist",
+    "ready": true,
+    "blocking_issues": []
+  },
+  "meta": {
+    "started_at": "2026-04-15T23:00:00+08:00",
+    "finished_at": "2026-04-15T23:03:00+08:00",
+    "tool_calls": 2,
+    "notes": []
+  }
+}

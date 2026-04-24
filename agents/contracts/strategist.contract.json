@@ -1,0 +1,44 @@
+{
+  "role_id": "strategist",
+  "record_id": "rec_xxx",
+  "status": "success",
+  "version": "v1",
+  "output": {
+    "strategy_summary": "采用预热-爆发-返场三阶段节奏，围绕产品卖点、使用场景与促销利益点组织内容。",
+    "content_pillars": [
+      "产品卖点",
+      "场景种草",
+      "大促转化"
+    ],
+    "platform_plan": [
+      {"platform": "小红书", "count": 4},
+      {"platform": "公众号", "count": 2},
+      {"platform": "短视频", "count": 4}
+    ],
+    "content_items": [
+      {
+        "seq": 1,
+        "title": "双十一预热主张",
+        "platform": "小红书",
+        "content_type": "种草图文",
+        "key_point": "成分党安心感",
+        "target_audience": "年轻女性"
+      }
+    ],
+    "knowledge_refs": [
+      "历史双十一案例A",
+      "品牌大促SOP"
+    ]
+  },
+  "handoff": {
+    "next_role": "copywriter",
+    "ready": true,
+    "blocking_issues": []
+  },
+  "meta": {
+    "started_at": "2026-04-15T23:03:00+08:00",
+    "finished_at": "2026-04-15T23:08:00+08:00",
+    "tool_calls": 4,
+    "notes": []
+  }
+}

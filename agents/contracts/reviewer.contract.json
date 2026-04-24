@@ -1,0 +1,38 @@
+{
+  "role_id": "reviewer",
+  "record_id": "rec_xxx",
+  "status": "success",
+  "version": "v1",
+  "output": {
+    "total_items": 10,
+    "passed_items": 7,
+    "failed_items": 3,
+    "pass_rate": 0.7,
+    "review_results": [
+      {
+        "content_record_id": "rec_content_1",
+        "review_status": "通过",
+        "feedback": "可直接排期"
+      },
+      {
+        "content_record_id": "rec_content_2",
+        "review_status": "驳回",
+        "feedback": "促销口径过猛，需重写CTA"
+      }
+    ],
+    "blocking_issues": [
+      "3条内容存在平台字数与措辞问题"
+    ]
+  },
+  "handoff": {
+    "next_role": "project_manager",
+    "ready": true,
+    "blocking_issues": []
+  },
+  "meta": {
+    "started_at": "2026-04-15T23:16:00+08:00",
+    "finished_at": "2026-04-15T23:22:00+08:00",
+    "tool_calls": 6,
+    "notes": []
+  }
+}

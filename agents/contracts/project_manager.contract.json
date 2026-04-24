@@ -1,0 +1,28 @@
+{
+  "role_id": "project_manager",
+  "record_id": "rec_xxx",
+  "status": "success",
+  "version": "v1",
+  "output": {
+    "scheduled_items": 7,
+    "unscheduled_items": 3,
+    "delivery_summary": "本项目共完成10条内容，其中7条通过审核并完成排期。",
+    "publish_plan": [
+      {
+        "content_record_id": "rec_content_1",
+        "publish_date": "2026-11-01"
+      }
+    ]
+  },
+  "handoff": {
+    "next_role": null,
+    "ready": true,
+    "blocking_issues": []
+  },
+  "meta": {
+    "started_at": "2026-04-15T23:22:00+08:00",
+    "finished_at": "2026-04-15T23:25:00+08:00",
+    "tool_calls": 3,
+    "notes": []
+  }
+}
