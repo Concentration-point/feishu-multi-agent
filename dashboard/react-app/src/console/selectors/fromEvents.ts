@@ -18,6 +18,9 @@ import type {
   ChannelRow,
   ContentDraft,
   CopywriterDeck,
+  ExperienceCard,
+  ExperienceEvolution,
+  ExperiencePhase,
   Milestone,
   PlanBlock,
   PMDeck,
@@ -258,6 +261,12 @@ interface EventSnapshot {
    * 非 fan-out 项目此 map 始终为空。
    */
   copywriterPlatformSubAgents: Map<string, { patchApplied: boolean; toolCalls: number }>;
+
+  /** 经验进化可视化 */
+  experienceCards: ExperienceCard[];
+  experienceLoadedRoles: string[];
+  experienceSettled: boolean;
+  experienceSummary: { total: number; passed: number; merged: number; settled: number };
 }
 
 interface ContentRowState {
@@ -297,6 +306,10 @@ function aggregate(events: PipelineEvent[]): EventSnapshot {
     humanReviews: [],
     toolStatsMap: new Map(),
     copywriterPlatformSubAgents: new Map(),
+    experienceCards: [],
+    experienceLoadedRoles: [],
+    experienceSettled: false,
+    experienceSummary: { total: 0, passed: 0, merged: 0, settled: 0 },
   };
 
   /** 记录 tool.called 时间戳，用于和 tool.returned 配对计算耗时 */
@@ -464,6 +477,130 @@ function aggregate(events: PipelineEvent[]): EventSnapshot {
           // already handled above, duplicate guard
         }
 
+        break;
+      }
+
+      case "experience.loaded": {
+        const roleId = asString(p.role_id);
+        if (!snap.experienceLoadedRoles.includes(roleId)) {
+          snap.experienceLoadedRoles.push(roleId);
+        }
+        const roleName = ROLE_NAME[ROLE_MAP[roleId] ?? "account"] ?? roleId;
+        const bitableCount = typeof p.bitable_count === "number" ? p.bitable_count : 0;
+        // loaded 事件生成一张“加载”卡片（不进漏斗统计）
+        snap.experienceCards.push({
+          roleId,
+          roleName,
+          category: asString(p.category) || "未分类",
+          lesson: `加载 ${bitableCount} 条 Bitable 经验` + (p.formal_loaded ? " + 正式沉淀区" : ""),
+          confidence: 0,
+          threshold: 0,
+          passed: true,
+          phase: "loaded",
+          bitableCount,
+          formalLoaded: !!p.formal_loaded,
+        });
+        break;
+      }
+
+      case "experience.distilled": {
+        const roleId = asString(p.role_id);
+        const roleName = ROLE_NAME[ROLE_MAP[roleId] ?? "account"] ?? roleId;
+        // 将已有的 loaded 卡片升级为 distilled，或新建
+        const existing = snap.experienceCards.find((c) => c.roleId === roleId && c.phase === "loaded");
+        if (existing) {
+          existing.phase = "distilled";
+          existing.lesson = asString(p.lesson) || existing.lesson;
+          existing.category = asString(p.category) || existing.category;
+        } else {
+          snap.experienceCards.push({
+            roleId,
+            roleName,
+            category: asString(p.category) || "未分类",
+            lesson: asString(p.lesson),
+            confidence: 0,
+            threshold: 0,
+            passed: true,
+            phase: "distilled",
+          });
+        }
+        break;
+      }
+
+      case "experience.scored": {
+        const roleId = asString(p.role_id);
+        const confidence = typeof p.confidence === "number" ? p.confidence : 0;
+        const threshold = typeof p.threshold === "number" ? p.threshold : 0.7;
+        const passed = !!p.passed;
+        const phase: ExperiencePhase = passed ? "scored" : "skipped";
+        const factors = p.factors as ExperienceCard["factors"] | undefined;
+        const roleName = ROLE_NAME[ROLE_MAP[roleId] ?? "account"] ?? roleId;
+        // 升级已有 distilled 卡片，或新建
+        const prev = snap.experienceCards.find((c) => c.roleId === roleId && (c.phase === "distilled" || c.phase === "loaded"));
+        if (prev) {
+          prev.phase = phase;
+          prev.confidence = confidence;
+          prev.threshold = threshold;
+          prev.passed = passed;
+          prev.factors = factors;
+          if (asString(p.lesson)) prev.lesson = asString(p.lesson);
+          if (asString(p.category)) prev.category = asString(p.category);
+        } else {
+          snap.experienceCards.push({
+            roleId,
+            roleName,
+            category: asString(p.category) || "未分类",
+            lesson: asString(p.lesson),
+            confidence,
+            threshold,
+            passed,
+            phase,
+            factors,
+          });
+        }
+        break;
+      }
+
+      case "experience.merging": {
+        const roleId = asString(p.role_id);
+        const card = snap.experienceCards.find((c) => c.roleId === roleId && c.phase === "scored");
+        if (card) card.phase = "merging";
+        break;
+      }
+
+      case "experience.merged": {
+        const roleId = asString(p.role_id);
+        const card = snap.experienceCards.find((c) => c.roleId === roleId && c.phase === "merging");
+        if (card) {
+          card.phase = "merged";
+          card.mergedFrom = typeof p.merged_from === "number" ? p.merged_from : 0;
+          if (typeof p.new_confidence === "number") card.confidence = p.new_confidence;
+        }
+        break;
+      }
+
+      case "experience.saved": {
+        const roleId = asString(p.role_id);
+        const card = snap.experienceCards.find(
+          (c) => c.roleId === roleId && (c.phase === "scored" || c.phase === "merged"),
+        );
+        if (card) {
+          card.phase = "saved";
+          card.bitableSaved = !!p.bitable_saved;
+          card.wikiSaved = !!p.wiki_saved;
+          if (typeof p.confidence === "number") card.confidence = p.confidence;
+        }
+        break;
+      }
+
+      case "experience.settle_completed": {
+        snap.experienceSettled = true;
+        snap.experienceSummary = {
+          total: typeof p.total_distilled === "number" ? p.total_distilled : 0,
+          passed: typeof p.passed_scoring === "number" ? p.passed_scoring : 0,
+          merged: typeof p.merged_groups === "number" ? p.merged_groups : 0,
+          settled: typeof p.final_settled === "number" ? p.final_settled : 0,
+        };
         break;
       }
 
@@ -1039,6 +1176,18 @@ function countByRole(snap: EventSnapshot, role: RoleId): number {
   return n;
 }
 
+function buildExperienceEvolution(snap: EventSnapshot): ExperienceEvolution {
+  return {
+    cards: snap.experienceCards,
+    loadedRoles: snap.experienceLoadedRoles,
+    totalDistilled: snap.experienceSummary.total,
+    passedScoring: snap.experienceSummary.passed,
+    mergedGroups: snap.experienceSummary.merged,
+    finalSettled: snap.experienceSummary.settled,
+    settled: snap.experienceSettled,
+  };
+}
+
 // =============== 公开接口 ===============
 
 /**
@@ -1068,5 +1217,6 @@ export function projectAgentSession(events: PipelineEvent[]): AgentSession {
     auditLog: buildAuditLog(snap),
     toolStats: buildToolStats(snap),
     riskBadges: buildRiskBadges(snap),
+    experienceEvolution: buildExperienceEvolution(snap),
   };
 }

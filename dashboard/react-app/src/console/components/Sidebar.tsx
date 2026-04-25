@@ -15,6 +15,7 @@
 
 import { motion } from "framer-motion";
 import { toolLabel } from "../toolLabels";
+import { ExperienceEvolution } from "./ExperienceEvolution";
 import type { AgentSession, MemoryState } from "../types";
 
 interface SidebarProps {
@@ -124,6 +125,19 @@ export function Sidebar({ session }: SidebarProps) {
             ))}
           </div>
         )}
+      </section>
+
+      {/* 经验进化 */}
+      <section>
+        <SideTitle
+          label="经验进化 · L2 沉淀"
+          count={
+            session.experienceEvolution.settled
+              ? `${session.experienceEvolution.finalSettled} / ${session.experienceEvolution.totalDistilled}`
+              : String(session.experienceEvolution.cards.length || "—")
+          }
+        />
+        <ExperienceEvolution data={session.experienceEvolution} />
       </section>
 
       {/* 审计日志 */}

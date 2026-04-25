@@ -25,8 +25,15 @@ from config import (
     REVIEW_STATUS_PENDING,
     REVIEW_STATUS_TIMEOUT,
     REVIEW_THRESHOLDS_BY_PROJECT_TYPE,
+    ROUTE_TABLE,
+    ROUTE_TERMINAL_STATUSES,
+    STATUS_DONE,
     STATUS_PENDING_REVIEW,
+    NEGOTIATION_CHECKPOINTS,
+    NEGOTIATION_ENABLED,
+    NEGOTIATION_MAX_ROUNDS,
 )
+from memory.negotiation import NegotiationManager, NegotiationMessage
 from dashboard.event_bus import EventBus
 from memory.experience import ExperienceManager
 from memory.project import BriefProject, ContentMemory, ProjectMemory
@@ -40,6 +47,7 @@ _ROLE_NAMES = {
     "copywriter": "文案",
     "reviewer": "审核",
     "project_manager": "项目经理",
+    "data_analyst": "数据分析师",
 }
 
 
@@ -58,21 +66,26 @@ def _contains_red_flag(text: str) -> bool:
 
 
 class Orchestrator:
+    # 默认流水线序列（仅用于 Dashboard 展示和 stage_total 计算）
+    DEFAULT_PIPELINE = [
+        "account_manager",
+        "strategist",
+        "copywriter",
+        "reviewer",
+        "project_manager",
+    ]
+
     def __init__(self, record_id: str, event_bus: EventBus | None = None):
         self.record_id = record_id
         self._event_bus = event_bus
-        self.pipeline = [
-            "account_manager",
-            "strategist",
-            "copywriter",
-            "reviewer",
-            "project_manager",
-        ]
+        self.pipeline = list(self.DEFAULT_PIPELINE)
         self.stage_results: list[StageResult] = []
         self.reviewer_retries = 0
         self._start_time = 0.0
         self._review_threshold = REVIEW_PASS_THRESHOLD_DEFAULT
         self._review_red_flag = ""
+        self._max_route_steps = 15  # 防止路由死循环的安全上限
+        self._negotiation = NegotiationManager()
 
     def _publish(self, event_type: str, payload: dict | None = None, *, agent_role: str = "", agent_name: str = "") -> None:
         if self._event_bus is None:
@@ -85,6 +98,22 @@ class Orchestrator:
             )
         except Exception:
             pass
+
+    async def _read_current_status(self) -> str:
+        """从 Bitable 读取项目当前状态，异常时返回空字符串。"""
+        try:
+            proj = await ProjectMemory(self.record_id).load()
+            return (proj.status or "").strip()
+        except Exception as exc:
+            logger.warning("动态路由：读取项目状态失败: %s", exc)
+            return ""
+
+    def _resolve_next_role(self, status: str) -> str | None:
+        """根据当前项目状态查路由表，返回下一个角色 ID 或 None（终止）。
+
+        未匹配的状态返回 None，由调用方决定是否 fallback。
+        """
+        return ROUTE_TABLE.get(status)
 
     async def run(self) -> list[StageResult]:
         self._start_time = time.perf_counter()
@@ -101,16 +130,23 @@ class Orchestrator:
 
         project_name = proj.client_name or "未知客户"
         brief_summary = (proj.brief or "")[:200]
+        current_status = (proj.status or "").strip()
 
         self._publish("pipeline.started", {
             "project_name": project_name,
             "brief": brief_summary,
             "stages": list(self.pipeline),
             "stage_names": {k: v for k, v in _ROLE_NAMES.items()},
+            "routing": "dynamic",
+            "initial_status": current_status,
         })
 
-        # ── 分支：状态为「待人审」 → 恢复人审门禁，跳过 AM ──
-        if proj.status == STATUS_PENDING_REVIEW:
+        # ── 动态路由主循环 ──
+        step = 0
+        prev_role: str = ""
+
+        # 入口：状态为「待人审」 → 恢复人审门禁
+        if current_status == STATUS_PENDING_REVIEW:
             print(f"[Orchestrator] 检测到 status='待人审'，跳过 AM 直接进入恢复门禁")
             await self._broadcast(
                 title="项目恢复",
@@ -124,38 +160,60 @@ class Orchestrator:
             if gate_outcome != "approved":
                 await self._finalize_pipeline_halted(project_name, gate_outcome)
                 return self.stage_results
-            # 放行 → 从 strategist 开始跑
-            start_index = 2
-            stages_to_run = self.pipeline[1:]
+            current_status = await self._read_current_status()
         else:
             await self._broadcast(
                 title="新项目启动",
                 content=(
                     f"客户 **{project_name}** 的 Brief 已接收，虚拟团队自动组建中\n\n"
-                    "客户经理 -> 策略师 -> 文案 -> 审核 -> 项目经理"
+                    "动态路由模式: 根据项目状态自动调度下一角色"
                 ),
                 color="purple",
             )
-            start_index = 1
-            stages_to_run = self.pipeline[:]
 
-        prev_role: str = ""
-        for index, role_id in enumerate(stages_to_run, start=start_index):
+        while step < self._max_route_steps:
+            next_role = self._resolve_next_role(current_status)
+
+            # 路由终止：状态已完成或已驳回
+            if next_role is None:
+                if current_status in ROUTE_TERMINAL_STATUSES:
+                    print(f"[Orchestrator] 动态路由终止: status='{current_status}'")
+                else:
+                    print(f"[Orchestrator] 动态路由: 未知状态 '{current_status}'，终止")
+                break
+
+            # 特殊路由：人审门禁
+            if next_role == "__human_review_gate__":
+                print(f"[Orchestrator] 动态路由 → 人审门禁 (status='{current_status}')")
+                gate_outcome = await self._enter_human_review_gate(resumed=False)
+                if gate_outcome != "approved":
+                    await self._finalize_pipeline_halted(project_name, gate_outcome)
+                    return self.stage_results
+                current_status = await self._read_current_status()
+                continue
+
+            step += 1
+            role_id = next_role
             role_name = _ROLE_NAMES.get(role_id, role_id)
+
             prev_duration = self.stage_results[-1].duration_sec if self.stage_results else 0
             self._publish("pipeline.stage_changed", {
-                "stage_index": index,
+                "stage_index": step,
                 "stage_total": len(self.pipeline),
                 "current_role": role_id,
                 "current_name": role_name,
                 "prev_role": prev_role,
                 "prev_duration": prev_duration,
+                "routed_from_status": current_status,
             }, agent_role=role_id, agent_name=role_name)
             prev_role = role_id
 
+            print(f"[Orchestrator] 动态路由: status='{current_status}' → {role_id} (step {step})")
+
+            # ── 执行阶段（保留 copywriter fan-out 特殊路径）──
             if role_id == "copywriter":
                 result, fanout_experiences = await self._run_copywriter_fanout(
-                    index=index,
+                    index=step,
                     total=len(self.pipeline),
                 )
                 self.stage_results.append(result)
@@ -163,7 +221,7 @@ class Orchestrator:
             else:
                 result, agent = await self._run_stage_with_agent(
                     role_id,
-                    index=index,
+                    index=step,
                     total=len(self.pipeline),
                 )
                 self.stage_results.append(result)
@@ -177,6 +235,7 @@ class Orchestrator:
                         }
                     )
 
+            # ── 广播阶段结果 ──
             if result.ok:
                 summary = result.output[:200] if result.output else "已完成"
                 await self._broadcast(
@@ -191,24 +250,32 @@ class Orchestrator:
                     color="red",
                 )
 
-            # ── AM 完成后触发人审门禁（非恢复路径）──
-            if role_id == "account_manager" and result.ok:
-                gate_outcome = await self._enter_human_review_gate(resumed=False)
-                if gate_outcome != "approved":
-                    await self._finalize_pipeline_halted(project_name, gate_outcome)
-                    return self.stage_results
+            # ── 协商检查点：上游完成后触发与下游的协商对话 ──
+            if result.ok:
+                await self._run_negotiation_checkpoint(
+                    upstream_role=role_id,
+                    project_name=project_name,
+                )
 
             # ── 文案完成后兜底：扫 draft 为空的行，单次 LLM 补写 ──
             if role_id == "copywriter" and result.ok:
                 await self._ensure_copywriter_drafts(project_name)
 
+            # ── 审核完成后处理返工逻辑 ──
             if role_id == "reviewer":
                 await self._handle_reviewer_retries(
-                    index=index,
+                    index=step,
                     total=len(self.pipeline),
                     pending_experiences=pending_experiences,
                 )
 
+            # ── 路由决策：读取最新状态，进入下一轮 ──
+            current_status = await self._read_current_status()
+
+        else:
+            print(f"[Orchestrator] 警告: 动态路由超出最大步数 {self._max_route_steps}，强制终止")
+
+        # ── 流水线收尾 ──
         total_time = time.perf_counter() - self._start_time
         pass_rate = await self._get_review_pass_rate()
         pass_rate = await self._reconcile_review_pass_rate(pass_rate)
@@ -219,6 +286,7 @@ class Orchestrator:
             title="项目交付就绪",
             content=(
                 f"客户 **{project_name}** 全链路完成\n"
+                f"- 动态路由步数: {step}\n"
                 f"- 阶段完成: {ok_count}/{len(self.stage_results)}\n"
                 f"- 审核通过率: {pass_rate_display}\n"
                 f"- 审核阈值: {self._review_threshold:.0%}\n"
@@ -234,11 +302,282 @@ class Orchestrator:
             "ok_count": ok_count,
             "total_stages": len(self.stage_results),
             "pass_rate": pass_rate,
-            "status": "已完成",
+            "status": current_status or STATUS_DONE,
+            "route_steps": step,
         })
 
         await self._settle_experiences(pending_experiences, project_name, pass_rate)
         return self.stage_results
+
+    async def _run_negotiation_checkpoint(
+        self,
+        *,
+        upstream_role: str,
+        project_name: str,
+    ) -> None:
+        """在上游 Agent 完成后，触发与配置中对应下游角色的协商对话。
+
+        协商流程：
+        1. 查找 NEGOTIATION_CHECKPOINTS 中以 upstream_role 为上游的配对
+        2. 用 LLM 模拟下游角色审阅上游产出，生成协商发起消息
+        3. 用 LLM 模拟上游角色回应
+        4. 最多 NEGOTIATION_MAX_ROUNDS 轮
+        5. 全程广播到 EventBus + IM
+        """
+        if not NEGOTIATION_ENABLED:
+            return
+
+        # 查找当前上游角色对应的协商检查点
+        downstream_roles = [
+            dr for ur, dr in NEGOTIATION_CHECKPOINTS if ur == upstream_role
+        ]
+        if not downstream_roles:
+            return
+
+        for downstream_role in downstream_roles:
+            upstream_name = _ROLE_NAMES.get(upstream_role, upstream_role)
+            downstream_name = _ROLE_NAMES.get(downstream_role, downstream_role)
+
+            print(
+                f"[Orchestrator] 协商检查点: {upstream_name} → {downstream_name}"
+            )
+            self._publish("negotiation.started", {
+                "upstream_role": upstream_role,
+                "downstream_role": downstream_role,
+                "upstream_name": upstream_name,
+                "downstream_name": downstream_name,
+            }, agent_role=downstream_role, agent_name=downstream_name)
+
+            # 读取上游产出作为协商上下文
+            upstream_output = ""
+            for sr in reversed(self.stage_results):
+                if sr.role_id == upstream_role and sr.ok:
+                    upstream_output = sr.output[:500]
+                    break
+
+            for round_num in range(1, NEGOTIATION_MAX_ROUNDS + 1):
+                # 下游发起协商
+                initiator_content = await self._generate_negotiation_message(
+                    sender_role=downstream_role,
+                    receiver_role=upstream_role,
+                    project_name=project_name,
+                    upstream_output=upstream_output,
+                    round_num=round_num,
+                    history=self._negotiation.format_for_prompt(_ROLE_NAMES),
+                )
+
+                if not initiator_content or initiator_content.startswith("__SKIP__"):
+                    print(
+                        f"[Orchestrator] {downstream_name} 对 {upstream_name} 的产出无异议，跳过协商"
+                    )
+                    self._publish("negotiation.skipped", {
+                        "reason": "no_concerns",
+                        "round": round_num,
+                    }, agent_role=downstream_role, agent_name=downstream_name)
+                    break
+
+                init_msg = NegotiationMessage(
+                    sender_role=downstream_role,
+                    receiver_role=upstream_role,
+                    msg_type="proposal" if round_num == 1 else "question",
+                    content=initiator_content,
+                    round_num=round_num,
+                )
+                rnd = self._negotiation.start_round(init_msg)
+
+                # 广播发起消息
+                await self._broadcast(
+                    title=f"💬 团队协商 [{downstream_name} → {upstream_name}]",
+                    content=(
+                        f"**{downstream_name}** 审阅 **{upstream_name}** 的产出后提出：\n\n"
+                        f"> {initiator_content[:300]}"
+                    ),
+                    color="purple",
+                )
+                self._publish("negotiation.message", {
+                    "sender": downstream_role,
+                    "receiver": upstream_role,
+                    "type": init_msg.msg_type,
+                    "content": initiator_content[:500],
+                    "round": round_num,
+                }, agent_role=downstream_role, agent_name=downstream_name)
+
+                # 上游回应
+                response_content = await self._generate_negotiation_response(
+                    sender_role=upstream_role,
+                    initiator_role=downstream_role,
+                    initiator_content=initiator_content,
+                    project_name=project_name,
+                    round_num=round_num,
+                )
+
+                resp_msg = NegotiationMessage(
+                    sender_role=upstream_role,
+                    receiver_role=downstream_role,
+                    msg_type="accept" if "接受" in response_content[:20] or "同意" in response_content[:20] else "concede",
+                    content=response_content,
+                    round_num=round_num,
+                )
+                self._negotiation.close_round(rnd, resp_msg)
+
+                # 广播回应
+                await self._broadcast(
+                    title=f"💬 {upstream_name} 回应",
+                    content=(
+                        f"**{upstream_name}** 回应 **{downstream_name}**：\n\n"
+                        f"> {response_content[:300]}"
+                    ),
+                    color="blue",
+                )
+                self._publish("negotiation.response", {
+                    "sender": upstream_role,
+                    "receiver": downstream_role,
+                    "type": resp_msg.msg_type,
+                    "content": response_content[:500],
+                    "round": round_num,
+                    "resolved": rnd.resolved,
+                }, agent_role=upstream_role, agent_name=upstream_name)
+
+                if rnd.resolved:
+                    print(
+                        f"[Orchestrator] 协商达成共识 (round {round_num})"
+                    )
+                    break
+
+            self._publish("negotiation.completed", {
+                "upstream_role": upstream_role,
+                "downstream_role": downstream_role,
+                "rounds": len(self._negotiation.rounds),
+                "messages": len(self._negotiation.messages),
+            }, agent_role=downstream_role, agent_name=downstream_name)
+
+    async def _generate_negotiation_message(
+        self,
+        *,
+        sender_role: str,
+        receiver_role: str,
+        project_name: str,
+        upstream_output: str,
+        round_num: int,
+        history: str,
+    ) -> str:
+        """生成下游角色审阅上游产出后的协商发起消息。
+
+        如果下游角色对上游产出无异议，返回 '__SKIP__'。
+        """
+        from openai import AsyncOpenAI
+
+        sender_name = _ROLE_NAMES.get(sender_role, sender_role)
+        receiver_name = _ROLE_NAMES.get(receiver_role, receiver_role)
+
+        soul_snippet = self._load_soul_snippet(sender_role)
+
+        system_prompt = (
+            f"你是内容营销团队的{sender_name}。{soul_snippet}\n\n"
+            f"你刚收到 {receiver_name} 的工作产出，需要从你的专业角度审阅。\n\n"
+            "审阅原则：\n"
+            "- 如果产出质量过关且符合项目需求，直接回复 '__SKIP__'（表示无异议）\n"
+            "- 如果有改进建议或疑问，用具体、建设性的方式提出\n"
+            "- 保持简洁，不超过 100 字\n"
+            "- 用第一人称，保持你的角色人格\n"
+            "- 不要泛泛而谈，要针对具体内容"
+        )
+
+        user_prompt = f"项目: {project_name}\n\n{receiver_name} 的产出摘要:\n{upstream_output}\n"
+        if history:
+            user_prompt += f"\n{history}\n"
+        user_prompt += f"\n请以{sender_name}身份审阅，有建议就提，没问题就回复 __SKIP__："
+
+        try:
+            client = AsyncOpenAI(
+                base_url=LLM_BASE_URL,
+                api_key=LLM_API_KEY,
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+            resp = await client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=200,
+                temperature=0.7,
+            )
+            return (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            logger.warning("协商消息生成失败: %s", e)
+            return "__SKIP__"
+
+    async def _generate_negotiation_response(
+        self,
+        *,
+        sender_role: str,
+        initiator_role: str,
+        initiator_content: str,
+        project_name: str,
+        round_num: int,
+    ) -> str:
+        """生成上游角色对下游协商消息的回应。"""
+        from openai import AsyncOpenAI
+
+        sender_name = _ROLE_NAMES.get(sender_role, sender_role)
+        initiator_name = _ROLE_NAMES.get(initiator_role, initiator_role)
+
+        soul_snippet = self._load_soul_snippet(sender_role)
+
+        system_prompt = (
+            f"你是内容营销团队的{sender_name}。{soul_snippet}\n\n"
+            f"{initiator_name} 对你的工作提出了建议，请基于你的专业立场回应。\n\n"
+            "回应原则：\n"
+            "- 如果对方说得有道理，明确接受并说明如何调整（以'接受'或'同意'开头）\n"
+            "- 如果你有不同看法，给出专业理由，但态度积极\n"
+            "- 保持简洁，不超过 120 字\n"
+            "- 用第一人称，保持你的角色人格\n"
+            "- 团队协作精神，不要对抗"
+        )
+
+        user_prompt = (
+            f"项目: {project_name}\n\n"
+            f"{initiator_name} 的建议（第 {round_num} 轮）：{initiator_content}\n\n"
+            f"请以{sender_name}身份回应："
+        )
+
+        try:
+            client = AsyncOpenAI(
+                base_url=LLM_BASE_URL,
+                api_key=LLM_API_KEY,
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+            resp = await client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=200,
+                temperature=0.7,
+            )
+            return (resp.choices[0].message.content or "").strip() or "收到，我会考虑调整。"
+        except Exception as e:
+            logger.warning("协商回应生成失败: %s", e)
+            return f"（{sender_name}暂时无法回应: {type(e).__name__}）"
+
+    @staticmethod
+    def _load_soul_snippet(role_id: str) -> str:
+        """加载角色 soul.md 核心描述片段（前 500 字正文）。"""
+        from pathlib import Path
+        soul_path = Path(__file__).resolve().parent / "agents" / role_id / "soul.md"
+        if not soul_path.exists():
+            return ""
+        try:
+            text = soul_path.read_text(encoding="utf-8")
+            if text.startswith("---"):
+                parts = text.split("---", 2)
+                if len(parts) >= 3:
+                    text = parts[2]
+            return text.strip()[:500]
+        except Exception:
+            return ""
 
     async def _run_stage_with_agent(
         self,
@@ -912,6 +1251,11 @@ class Orchestrator:
             print("[Orchestrator] 无经验卡片需要沉淀")
             return
 
+        self._publish("experience.settle_started", {
+            "total": len(pending),
+            "project_name": project_name,
+        })
+
         deduped: dict[str, dict] = {}
         for item in pending:
             deduped[item["role_id"]] = item
@@ -953,6 +1297,21 @@ class Orchestrator:
                 knowledge_cited=knowledge_cited,
             )
 
+            self._publish("experience.scored", {
+                "role_id": role_id,
+                "confidence": confidence,
+                "threshold": EXPERIENCE_CONFIDENCE_THRESHOLD,
+                "passed": confidence >= EXPERIENCE_CONFIDENCE_THRESHOLD,
+                "factors": {
+                    "pass_rate": pass_rate,
+                    "task_completed": stage_ok,
+                    "no_rework": no_rework,
+                    "knowledge_cited": knowledge_cited,
+                },
+                "lesson": str(card.get("lesson", "") or "")[:80],
+                "category": card.get("category", "未分类"),
+            }, agent_role=role_id)
+
             if confidence < EXPERIENCE_CONFIDENCE_THRESHOLD:
                 logger.info(
                     "[经验沉淀] 跳过 %s，置信度 %.2f < %.2f",
@@ -976,11 +1335,22 @@ class Orchestrator:
                     logger.info("[经验沉淀] %s/%s 命中去重候选 %d 条", role_id, category, len(existing))
 
                 if len(existing) >= EXPERIENCE_MAX_PER_CATEGORY:
+                    self._publish("experience.merging", {
+                        "role_id": role_id,
+                        "category": category,
+                        "existing_count": len(existing),
+                    }, agent_role=role_id)
                     merged = await em.merge_experiences(existing, card)
                     if merged:
                         card = merged
                         confidence = merged.get("_merged_confidence", confidence)
                         merged_count += 1
+                        self._publish("experience.merged", {
+                            "role_id": role_id,
+                            "category": category,
+                            "merged_from": len(existing),
+                            "new_confidence": confidence,
+                        }, agent_role=role_id)
 
                 saved = await em.save_experience(card, confidence, project_name)
                 # Agent 未自主写入 wiki 时，Orchestrator 兜底写入
@@ -989,6 +1359,14 @@ class Orchestrator:
                     wiki_saved = await em.save_to_wiki(card, confidence)
                 if saved or wiki_saved:
                     settled += 1
+                    self._publish("experience.saved", {
+                        "role_id": role_id,
+                        "category": category,
+                        "confidence": confidence,
+                        "lesson": lesson[:80],
+                        "bitable_saved": bool(saved),
+                        "wiki_saved": bool(wiki_saved),
+                    }, agent_role=role_id)
                 else:
                     logger.info("[经验沉淀] %s 被质量门槛或去重策略拦截，未落盘", role_id)
             except Exception as exc:
@@ -998,6 +1376,13 @@ class Orchestrator:
             f"[Orchestrator] 经验沉淀完成:\n"
             f"  蒸馏 {total} 条 -> 打分通过 {passed} 条 -> 合并 {merged_count} 组 -> 最终沉淀 {settled} 条"
         )
+        self._publish("experience.settle_completed", {
+            "total_distilled": total,
+            "passed_scoring": passed,
+            "merged_groups": merged_count,
+            "final_settled": settled,
+            "project_name": project_name,
+        })
 
     @staticmethod
     def _calc_confidence(

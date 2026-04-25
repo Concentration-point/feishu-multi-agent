@@ -387,6 +387,7 @@ class BaseAgent:
         "copywriter": "文案",
         "reviewer": "审核",
         "project_manager": "项目经理",
+        "data_analyst": "数据分析师",
     }
 
     def __init__(
@@ -477,13 +478,17 @@ class BaseAgent:
 
     async def run(self) -> str:
         """执行 Agent 的完整 ReAct 循环。"""
-        # 1. 加载项目上下文
-        pm = ProjectMemory(self.record_id)
-        proj = await pm.load()
+        # 1. 加载项目上下文（独立 Agent 如数据分析师无对应记录时兜底）
+        try:
+            pm = ProjectMemory(self.record_id)
+            proj = await pm.load()
+        except Exception:
+            logger.info("[%s] 无对应项目记录，使用空上下文", self.soul.name)
+            proj = BriefProject(record_id=self.record_id)
 
         context = AgentContext(
             record_id=self.record_id,
-            project_name=proj.client_name,
+            project_name=proj.client_name or self.role_id,
             role_id=self.role_id,
         )
 
@@ -494,13 +499,19 @@ class BaseAgent:
         system_prompt = self._build_system_prompt(proj, experience_text)
 
         # 4. 构造初始消息
-        user_msg_parts = [
-            "请开始处理以下项目:",
-            f"- 客户名称: {proj.client_name}",
-            f"- 项目类型: {proj.project_type}",
-            f"- 当前状态: {proj.status}",
-            f"- record_id: {self.record_id}",
-        ]
+        if proj.client_name:
+            user_msg_parts = [
+                "请开始处理以下项目:",
+                f"- 客户名称: {proj.client_name}",
+                f"- 项目类型: {proj.project_type}",
+                f"- 当前状态: {proj.status}",
+                f"- record_id: {self.record_id}",
+            ]
+        else:
+            user_msg_parts = [
+                "请开始执行你的工作任务。",
+                f"- record_id: {self.record_id}",
+            ]
         # fan-out 子 agent 注入 platform 约束 — 强制 LLM 只处理自己负责的 platform 子集
         platform_filter = (self._task_filter or {}).get("platform")
         if platform_filter:
@@ -514,6 +525,19 @@ class BaseAgent:
             )
             user_msg_parts.append(
                 "- 处理完 platform 子集后即可结束，不要等待/影响其他平台"
+            )
+        # 数据分析师注入报告类型约束
+        report_type = (self._task_filter or {}).get("report_type")
+        if report_type:
+            _REPORT_TYPE_NAMES = {
+                "weekly": "运营周报",
+                "insight": "数据洞察",
+                "decision": "决策建议",
+            }
+            user_msg_parts.append("")
+            user_msg_parts.append(
+                f"【报告类型】请生成一份「{_REPORT_TYPE_NAMES.get(report_type, report_type)}」"
+                f"（report_type={report_type}）。"
             )
         user_msg_parts.append("")
         user_msg_parts.append("请按照你的工作流程逐步执行。")
@@ -641,6 +665,12 @@ class BaseAgent:
                     "[%s] Hook 蒸馏完成: %s",
                     self.soul.name, experience_card.get("lesson", "")[:80],
                 )
+                self._publish("experience.distilled", {
+                    "role_id": self.role_id,
+                    "category": experience_card.get("category", "未分类"),
+                    "lesson": str(experience_card.get("lesson", ""))[:80],
+                    "applicable_roles": experience_card.get("applicable_roles", []),
+                })
                 # 自主写入本地 wiki
                 await self._self_write_wiki(experience_card, context)
             else:
@@ -682,6 +712,7 @@ class BaseAgent:
         - 11_待整理收件箱/ 的脏经验**不**进 prompt，避免污染
         """
         lines: list[str] = []
+        bitable_count = 0
 
         # L1a：Bitable top-K
         try:
@@ -690,6 +721,7 @@ class BaseAgent:
                 self.role_id, category=project_type, k=EXPERIENCE_TOP_K
             )
             if experiences:
+                bitable_count = len(experiences)
                 lines.append("## 过往高分经验（基于 Bitable 经验池 top-K）")
                 lines.append("以下是你在类似场景中积累的经验，请参考但不要机械照搬：")
                 for i, exp in enumerate(experiences, 1):
@@ -700,6 +732,7 @@ class BaseAgent:
             logger.warning("[%s] 加载 Bitable 经验失败: %s", self.soul.name, e)
 
         # L1b：10_经验沉淀/ 正式经验全文
+        formal_loaded = False
         try:
             formal = load_formal_experiences(category=project_type) if project_type else ""
             if formal:
@@ -707,8 +740,18 @@ class BaseAgent:
                     lines.append("")
                 lines.append("## 正式沉淀经验（knowledge/10_经验沉淀/）")
                 lines.append(formal)
+                formal_loaded = True
         except Exception as e:
             logger.warning("[%s] 加载正式经验失败: %s", self.soul.name, e)
+
+        # 发布经验加载事件供 Dashboard 可视化
+        if lines:
+            self._publish("experience.loaded", {
+                "role_id": self.role_id,
+                "bitable_count": bitable_count,
+                "formal_loaded": formal_loaded,
+                "category": project_type or "未分类",
+            })
 
         return "\n".join(lines)
 

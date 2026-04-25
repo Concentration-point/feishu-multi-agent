@@ -13,6 +13,7 @@ _ROLE_NAMES = {
     "copywriter": "文案",
     "reviewer": "审核",
     "project_manager": "项目经理",
+    "data_analyst": "数据分析师",
 }
 
 SCHEMA = {

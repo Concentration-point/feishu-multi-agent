@@ -84,6 +84,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("serve", help="Run FastAPI webhook server")
 
+    report_parser = subparsers.add_parser(
+        "report",
+        help="Run data analyst to generate business report",
+    )
+    report_parser.add_argument(
+        "--type",
+        choices=["weekly", "insight", "decision"],
+        default="weekly",
+        dest="report_type",
+        help="报告类型: weekly=运营周报, insight=数据洞察, decision=决策建议",
+    )
+
     return parser
 
 
@@ -198,6 +210,26 @@ async def run_pipeline(record_id: str) -> int:
     return 0
 
 
+async def run_report(report_type: str = "weekly") -> int:
+    """运行数据分析师 Agent，生成并推送业务报告。"""
+    import time
+    from agents.base import BaseAgent
+
+    record_id = f"report_{int(time.time())}"
+    agent = BaseAgent(
+        role_id="data_analyst",
+        record_id=record_id,
+        event_bus=event_bus,
+        task_filter={"report_type": report_type},
+    )
+    result = await agent.run()
+    print(f"\n{'='*60}")
+    print(f"数据分析报告（{report_type}）")
+    print(f"{'='*60}")
+    print(result)
+    return 0
+
+
 async def run_sync(direction: str = "up") -> int:
     if not WIKI_SPACE_ID:
         print("错误: WIKI_SPACE_ID 未配置，请在 .env 中设置")
@@ -302,6 +334,39 @@ async def trigger_pipeline(record_id: str):
     _running_record_ids.add(record_id)
     _track_task(_launch_pipeline(record_id))
     return JSONResponse({"ok": True, "record_id": record_id})
+
+
+@app.post("/api/report")
+async def trigger_report(request: Request):
+    """触发数据分析师生成业务报告。"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    report_type = body.get("report_type", "weekly")
+    if report_type not in ("weekly", "insight", "decision"):
+        report_type = "weekly"
+
+    import time
+    from agents.base import BaseAgent
+
+    record_id = f"report_{int(time.time())}"
+    agent = BaseAgent(
+        role_id="data_analyst",
+        record_id=record_id,
+        event_bus=event_bus,
+        task_filter={"report_type": report_type},
+    )
+    _track_task(_run_report_agent(agent, record_id))
+    return JSONResponse({"ok": True, "record_id": record_id, "report_type": report_type})
+
+
+async def _run_report_agent(agent, record_id: str) -> None:
+    try:
+        logger.info("[Report] start data analyst for %s", record_id)
+        await agent.run()
+    except Exception:
+        logger.exception("[Report] data analyst failed for %s", record_id)
 
 
 @app.post("/api/demo/start")
@@ -595,6 +660,9 @@ def main() -> int:
     if args.command == "sync":
         direction = getattr(args, "direction", "up")
         return asyncio.run(run_sync(direction))
+    if args.command == "report":
+        report_type = getattr(args, "report_type", "weekly")
+        return asyncio.run(run_report(report_type))
     if args.command == "serve":
         import uvicorn
 

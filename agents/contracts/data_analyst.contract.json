@@ -1,0 +1,36 @@
+{
+  "role_id": "data_analyst",
+  "record_id": "report_xxx",
+  "status": "success",
+  "version": "v1",
+  "output": {
+    "report_type": "weekly",
+    "report_title": "智策传媒·运营周报（2026-04-25）",
+    "data_scope": {
+      "projects_analyzed": 12,
+      "content_items_analyzed": 48,
+      "experience_items_analyzed": 35
+    },
+    "key_findings": [
+      "项目完成率 75%，电商大促类审核通过率最高（82%）",
+      "小红书平台成稿率高但返工率偏高（30%）",
+      "经验池策略师贡献最少，需关注策略阶段蒸馏质量"
+    ],
+    "recommendations": [
+      "建议小红书文案加强合规自检环节",
+      "建议提高新品发布类项目审核阈值至 0.75"
+    ],
+    "report_sent": true
+  },
+  "handoff": {
+    "next_role": null,
+    "ready": true,
+    "blocking_issues": []
+  },
+  "meta": {
+    "started_at": "2026-04-25T22:00:00+08:00",
+    "finished_at": "2026-04-25T22:02:00+08:00",
+    "tool_calls": 2,
+    "notes": ["独立于项目流水线，按需或定时触发"]
+  }
+}

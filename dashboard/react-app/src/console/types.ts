@@ -112,6 +112,44 @@ export interface RiskBadge {
   kind: "warn" | "error" | "ok";
 }
 
+/** 经验进化可视化 */
+export type ExperiencePhase = "loaded" | "distilled" | "scored" | "merging" | "merged" | "saved" | "skipped";
+
+export interface ExperienceCard {
+  roleId: string;
+  roleName: string;
+  category: string;
+  lesson: string;
+  confidence: number;
+  threshold: number;
+  passed: boolean;
+  phase: ExperiencePhase;
+  factors?: {
+    pass_rate: number | null;
+    task_completed: boolean;
+    no_rework: boolean;
+    knowledge_cited: boolean;
+  };
+  mergedFrom?: number;
+  bitableSaved?: boolean;
+  wikiSaved?: boolean;
+  /** loaded 阶段专用：从 Bitable 加载的经验条数 */
+  bitableCount?: number;
+  /** loaded 阶段专用：是否加载了正式沉淀经验 */
+  formalLoaded?: boolean;
+}
+
+export interface ExperienceEvolution {
+  cards: ExperienceCard[];
+  /** loaded 阶段的角色 ID 列表 */
+  loadedRoles: string[];
+  totalDistilled: number;
+  passedScoring: number;
+  mergedGroups: number;
+  finalSettled: number;
+  settled: boolean;
+}
+
 export interface KnowledgeChip {
   label: string;
   kind: ToolKind;
@@ -205,4 +243,7 @@ export interface AgentSession {
   auditLog: AuditEntry[];
   toolStats: ToolStat[];
   riskBadges: RiskBadge[];
+
+  /** 经验进化可视化 */
+  experienceEvolution: ExperienceEvolution;
 }
