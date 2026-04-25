@@ -1,0 +1,1606 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Panel · Playground</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=IBM+Plex+Serif:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-0: #0a0d0f;
+  --bg-1: #0f1416;
+  --bg-2: #141a1d;
+  --bg-3: #1a2124;
+  --border: #202a2e;
+  --border-soft: #1a2226;
+  --text-1: #e8ecef;
+  --text-2: #9aa5ab;
+  --text-3: #5f6d74;
+  --text-4: #3f4a50;
+  --accent: #6ee7b7;
+  --accent-dim: #10b981;
+  --accent-glow: rgba(110, 231, 183, 0.12);
+  --warn: #fbbf24;
+  --info: #60a5fa;
+  --danger: #f87171;
+  --purple: #a78bfa;
+  --radius: 6px;
+  --radius-lg: 10px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 0%, rgba(16, 185, 129, 0.04), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(96, 165, 250, 0.03), transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.app {
+  position: relative;
+  z-index: 1;
+  height: 100vh;
+  display: grid;
+  grid-template-rows: 48px 1fr;
+}
+
+/* ============ TOP BAR ============ */
+.topbar {
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--bg-1), var(--bg-0));
+  gap: 24px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text-2);
+}
+
+.brand-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 12px var(--accent-glow), 0 0 0 3px rgba(110, 231, 183, 0.08);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+.role-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+}
+
+.role-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+  position: relative;
+  border: 1px solid transparent;
+}
+
+.role-tab:hover {
+  color: var(--text-1);
+  background: var(--bg-2);
+}
+
+.role-tab.active {
+  color: var(--accent);
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+
+.role-tab.active::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+.role-tab .count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-4);
+  background: var(--bg-3);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.role-tab.active .count {
+  color: var(--accent-dim);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.view-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-2);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.view-toggle button {
+  background: transparent;
+  border: none;
+  color: var(--text-3);
+  padding: 4px 10px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.view-toggle button.active {
+  background: var(--bg-0);
+  color: var(--accent);
+}
+
+/* ============ MAIN LAYOUT ============ */
+.main {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  overflow: hidden;
+}
+
+.stage {
+  overflow-y: auto;
+  padding: 28px 36px 80px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.stage::-webkit-scrollbar { width: 8px; }
+.stage::-webkit-scrollbar-track { background: transparent; }
+.stage::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.sidebar {
+  border-left: 1px solid var(--border);
+  background: var(--bg-1);
+  overflow-y: auto;
+  padding: 20px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.sidebar::-webkit-scrollbar { width: 6px; }
+.sidebar::-webkit-scrollbar-track { background: transparent; }
+.sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* ============ STAGE HEADER ============ */
+.stage-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 4px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.stage-title {
+  font-family: 'IBM Plex Serif', serif;
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.stage-subtitle {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.stage-meta {
+  margin-left: auto;
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-3);
+}
+
+.stage-meta strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ============ TIMELINE (subtle, for state transitions) ============ */
+.timeline-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 20px 0 28px;
+  padding: 10px 14px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.timeline-strip::-webkit-scrollbar { display: none; }
+
+.ts-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--bg-2);
+}
+
+.ts-node.current {
+  color: var(--accent);
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.08);
+}
+
+.ts-arrow {
+  color: var(--text-4);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+}
+
+.ts-node-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor;
+}
+
+/* ============ COPY ROLE: content-first waterfall ============ */
+.copy-view { display: block; }
+
+.copy-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 24px 0 14px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.copy-section-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-soft);
+}
+
+.copy-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 16px;
+}
+
+.copy-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 20px 22px;
+  position: relative;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.copy-card:hover {
+  border-color: rgba(110, 231, 183, 0.3);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.copy-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 3px;
+  height: 100%;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.copy-card:hover::before { opacity: 1; }
+
+.cc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-3);
+}
+
+.cc-platform {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 500;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+}
+
+.cc-platform.xhs { background: rgba(248, 113, 113, 0.12); color: #fca5a5; }
+.cc-platform.gzh { background: rgba(16, 185, 129, 0.12); color: var(--accent); }
+.cc-platform.dy { background: rgba(167, 139, 250, 0.12); color: var(--purple); }
+
+.cc-type { color: var(--text-3); }
+.cc-seq { margin-left: auto; color: var(--text-4); }
+
+.cc-title {
+  font-family: 'IBM Plex Serif', serif;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.35;
+  margin-bottom: 10px;
+  letter-spacing: -0.005em;
+}
+
+.cc-body {
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-2);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cc-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-soft);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-3);
+}
+
+.cc-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cc-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.cc-status-dot.draft { background: var(--warn); }
+.cc-status-dot.review { background: var(--info); }
+
+.cc-wordcount {
+  color: var(--text-4);
+}
+
+/* ============ STRATEGY ROLE: outline + plan ============ */
+.strategy-view { display: none; }
+
+.plan-hero {
+  padding: 28px 32px;
+  background: linear-gradient(135deg, var(--bg-1), var(--bg-2));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  margin: 20px 0 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+.plan-hero::before {
+  content: '';
+  position: absolute;
+  top: 0; right: 0;
+  width: 200px;
+  height: 100%;
+  background: radial-gradient(circle at right top, var(--accent-glow), transparent 70%);
+  pointer-events: none;
+}
+
+.plan-kicker {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.plan-title {
+  font-family: 'IBM Plex Serif', serif;
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  margin-bottom: 8px;
+}
+
+.plan-tagline {
+  color: var(--text-2);
+  font-size: 14px;
+  max-width: 640px;
+}
+
+.plan-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.plan-block {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+}
+
+.pb-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+
+.pb-value {
+  font-size: 14px;
+  color: var(--text-1);
+  line-height: 1.6;
+}
+
+.pb-value strong { color: var(--accent); font-weight: 600; }
+
+.channel-row {
+  display: grid;
+  grid-template-columns: 100px 1fr auto;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-soft);
+  align-items: center;
+}
+
+.channel-row:last-child { border-bottom: none; }
+
+.channel-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.channel-role {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.channel-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--accent);
+  background: rgba(16, 185, 129, 0.08);
+  padding: 3px 10px;
+  border-radius: 12px;
+}
+
+/* ============ REVIEW ROLE: checklist + diff ============ */
+.review-view { display: none; }
+
+.review-item {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-bottom: 10px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 14px;
+  align-items: center;
+}
+
+.review-item.warn { border-left-color: var(--warn); }
+.review-item.issue { border-left-color: var(--danger); }
+
+.ri-check {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent);
+  display: grid; place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.review-item.warn .ri-check {
+  background: rgba(251, 191, 36, 0.15);
+  color: var(--warn);
+}
+.review-item.issue .ri-check {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--danger);
+}
+
+.ri-body { font-size: 13px; }
+.ri-title { font-weight: 600; margin-bottom: 3px; }
+.ri-desc { color: var(--text-2); font-size: 12px; }
+
+.ri-action {
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  background: var(--bg-2);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.ri-action:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ============ TOOL CHIPS (shared, secondary info) ============ */
+.tool-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 16px 0 20px;
+  align-items: center;
+}
+
+.tool-row-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-4);
+  margin-right: 4px;
+}
+
+.tool-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tool-chip:hover {
+  background: var(--bg-3);
+  border-color: rgba(110, 231, 183, 0.3);
+  color: var(--text-1);
+}
+
+.tool-chip.active {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.3);
+  color: var(--accent);
+}
+
+.tool-chip-icon {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: currentColor;
+  opacity: 0.8;
+}
+
+.tool-chip .ms {
+  color: var(--text-4);
+  font-size: 9.5px;
+  margin-left: 2px;
+}
+
+/* ============ SIDEBAR ============ */
+.side-section {
+  margin-bottom: 28px;
+}
+
+.side-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.side-title .count {
+  color: var(--accent);
+}
+
+/* Project memory progress */
+.progress-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.progress-dot {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-4);
+  flex-shrink: 0;
+  display: grid; place-items: center;
+}
+
+.progress-dot.done {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-0);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.progress-dot.current {
+  border-color: var(--accent);
+  background: transparent;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+  position: relative;
+}
+
+.progress-dot.current::after {
+  content: '';
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.progress-item.done { color: var(--text-1); }
+.progress-item.current { color: var(--accent); font-weight: 500; }
+
+/* Tool audit log */
+.audit-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+}
+
+.audit-entry {
+  display: grid;
+  grid-template-columns: 38px 1fr auto;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  color: var(--text-3);
+  cursor: pointer;
+  align-items: center;
+  transition: background 0.12s;
+}
+
+.audit-entry:hover { background: var(--bg-2); }
+
+.audit-time {
+  color: var(--text-4);
+  font-size: 10px;
+}
+
+.audit-name {
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-entry.info .audit-name { color: var(--info); }
+.audit-entry.ok .audit-name { color: var(--accent); }
+.audit-entry.warn .audit-name { color: var(--warn); }
+
+.audit-dur {
+  font-size: 10px;
+  color: var(--text-4);
+}
+
+/* Tool stats bars */
+.tool-stat {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  position: relative;
+}
+
+.ts-name { color: var(--text-2); z-index: 1; }
+.ts-count { color: var(--accent); font-weight: 600; z-index: 1; }
+
+.ts-bar {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(16, 185, 129, 0.08), transparent);
+  border-radius: 3px;
+  transform-origin: left;
+}
+
+/* ============ MODAL / DRAWER ============ */
+.drawer {
+  position: fixed;
+  top: 0; right: 0;
+  height: 100vh;
+  width: 560px;
+  background: var(--bg-1);
+  border-left: 1px solid var(--border);
+  transform: translateX(100%);
+  transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -20px 0 60px rgba(0, 0, 0, 0.4);
+}
+
+.drawer.open { transform: translateX(0); }
+
+.drawer-head {
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.drawer-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.drawer-sub {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-3);
+  margin-left: auto;
+}
+
+.drawer-close {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  width: 26px; height: 26px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: grid; place-items: center;
+  font-size: 14px;
+}
+
+.drawer-close:hover { color: var(--text-1); border-color: var(--accent); }
+
+.drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.dr-section { margin-bottom: 22px; }
+
+.dr-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+
+.dr-code {
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-2);
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.dr-code .k { color: var(--info); }
+.dr-code .s { color: var(--accent); }
+.dr-code .n { color: var(--purple); }
+.dr-code .p { color: var(--text-4); }
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+  z-index: 99;
+}
+
+.backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ============ COMPARE MODE (old panel) ============ */
+.old-mode .stage { display: none; }
+.old-mode .sidebar { display: none; }
+.old-mode .main { grid-template-columns: 1fr; }
+.old-stage { display: none; }
+.old-mode .old-stage { display: block; overflow-y: auto; padding: 28px 36px; }
+
+.old-bubble {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  position: relative;
+}
+
+.old-bubble::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 0;
+  width: 4px;
+  height: 100%;
+  border-radius: 8px 0 0 8px;
+}
+
+.old-bubble.green::before { background: linear-gradient(180deg, #22d3ee, #10b981); }
+.old-bubble.purple::before { background: linear-gradient(180deg, #c084fc, #7c3aed); }
+.old-bubble.blue::before { background: linear-gradient(180deg, #60a5fa, #2563eb); }
+
+.old-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+
+.old-bubble.green .old-head { background: rgba(16, 185, 129, 0.15); color: #6ee7b7; }
+.old-bubble.purple .old-head { background: rgba(167, 139, 250, 0.15); color: #c084fc; }
+.old-bubble.blue .old-head { background: rgba(96, 165, 250, 0.15); color: #93c5fd; }
+
+.old-content { font-size: 13px; color: var(--text-2); font-family: 'JetBrains Mono', monospace; }
+.old-content h3, .old-content h4 { color: var(--text-1); font-family: 'IBM Plex Sans', sans-serif; margin: 10px 0 6px; }
+
+/* ============ DESIGN NOTES POPUP ============ */
+.notes-btn {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  padding: 8px 14px;
+  border-radius: 20px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  z-index: 50;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.notes-btn:hover { border-color: var(--accent); }
+
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <!-- ============ TOP BAR ============ -->
+  <div class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span>CDSS · AGENT CONSOLE</span>
+    </div>
+
+    <div class="role-tabs" id="roleTabs">
+      <div class="role-tab" data-role="account">
+        <span>客户经理</span><span class="count">18</span>
+      </div>
+      <div class="role-tab" data-role="strategy">
+        <span>策略师</span><span class="count">16</span>
+      </div>
+      <div class="role-tab active" data-role="copy">
+        <span>文案</span><span class="count">45</span>
+      </div>
+      <div class="role-tab" data-role="review">
+        <span>审核</span><span class="count">75</span>
+      </div>
+      <div class="role-tab" data-role="pm">
+        <span>项目经理</span><span class="count">12</span>
+      </div>
+    </div>
+
+    <div class="view-toggle">
+      <button class="active" onclick="setMode('new')">NEW</button>
+      <button onclick="setMode('old')">OLD</button>
+    </div>
+  </div>
+
+  <!-- ============ MAIN ============ -->
+  <div class="main">
+
+    <!-- === STAGE (new design) === -->
+    <div class="stage" id="stage">
+
+      <!-- ===== COPY VIEW ===== -->
+      <div class="copy-view" id="view-copy">
+        <div class="stage-header">
+          <div class="stage-title">文案 · 六一益智玩具套装</div>
+          <div class="stage-subtitle">COPYWRITER · R2</div>
+          <div class="stage-meta">
+            <span>产出 <strong>4</strong> 篇</span>
+            <span>字数 <strong>3,847</strong></span>
+            <span>耗时 <strong>2m 14s</strong></span>
+          </div>
+        </div>
+
+        <!-- Subtle timeline strip for state transitions -->
+        <div class="timeline-strip">
+          <span class="ts-node"><span class="ts-node-dot"></span>Brief 解读</span>
+          <span class="ts-arrow">→</span>
+          <span class="ts-node"><span class="ts-node-dot"></span>策略中</span>
+          <span class="ts-arrow">→</span>
+          <span class="ts-node current"><span class="ts-node-dot"></span>撰写中</span>
+          <span class="ts-arrow">→</span>
+          <span class="ts-node"><span class="ts-node-dot"></span>待审核</span>
+          <span class="ts-arrow">→</span>
+          <span class="ts-node"><span class="ts-node-dot"></span>交付</span>
+        </div>
+
+        <!-- Tool chips row -->
+        <div class="tool-row">
+          <span class="tool-row-label">CONTEXT ▸</span>
+          <span class="tool-chip" onclick="openDrawer('read_project')">
+            <span class="tool-chip-icon" style="color:var(--info)"></span>
+            read_project<span class="ms">142ms</span>
+          </span>
+          <span class="tool-chip" onclick="openDrawer('list_content')">
+            <span class="tool-chip-icon" style="color:var(--info)"></span>
+            list_content<span class="ms">89ms</span>
+          </span>
+          <span class="tool-chip" onclick="openDrawer('search_knowledge')">
+            <span class="tool-chip-icon" style="color:var(--purple)"></span>
+            search_knowledge · 3×<span class="ms">1.2s</span>
+          </span>
+          <span class="tool-chip active" onclick="openDrawer('write_content')">
+            <span class="tool-chip-icon"></span>
+            write_content · 4×
+          </span>
+          <span class="tool-chip" onclick="openDrawer('update_status')">
+            <span class="tool-chip-icon" style="color:var(--warn)"></span>
+            update_status · 策略中 → 撰写中
+          </span>
+        </div>
+
+        <!-- Section: drafts -->
+        <div class="copy-section-title">Drafts · 本轮产出</div>
+        <div class="copy-grid">
+
+          <div class="copy-card" onclick="openDrawer('draft1')">
+            <div class="cc-head">
+              <span class="cc-platform gzh">公众号</span>
+              <span class="cc-type">教育价值信任</span>
+              <span class="cc-seq">#seq 1</span>
+            </div>
+            <div class="cc-title">六一儿童节给孩子选益智玩具，家长先看这3点</div>
+            <div class="cc-body">六一快到了，很多家长都会遇到同一个问题：礼物到底怎么选，才不会买回去吃灰？比起只看"好不好看""孩子会不会一时喜欢"，真正值得慎重考虑的，是这份礼物能不能玩得久、用得上、孩子愿意反复拿出来。</div>
+            <div class="cc-footer">
+              <span class="cc-status"><span class="cc-status-dot"></span>已完成</span>
+              <span class="cc-wordcount">1,247 字</span>
+            </div>
+          </div>
+
+          <div class="copy-card" onclick="openDrawer('draft2')">
+            <div class="cc-head">
+              <span class="cc-platform xhs">小红书</span>
+              <span class="cc-type">对比种草</span>
+              <span class="cc-seq">#seq 2</span>
+            </div>
+            <div class="cc-title">同样是六一礼物，为什么益智玩具套装更适合家长决策</div>
+            <div class="cc-body">28-40岁家长的痛点：送娃的礼物不能是短命款。对比了市面上三类主流六一礼物之后，我把关注点落在了"陪伴感 + 仪式感 + 能力长期训练"三个维度……</div>
+            <div class="cc-footer">
+              <span class="cc-status"><span class="cc-status-dot"></span>已完成</span>
+              <span class="cc-wordcount">856 字</span>
+            </div>
+          </div>
+
+          <div class="copy-card" onclick="openDrawer('draft3')">
+            <div class="cc-head">
+              <span class="cc-platform xhs">小红书</span>
+              <span class="cc-type">场景代入</span>
+              <span class="cc-seq">#seq 3</span>
+            </div>
+            <div class="cc-title">真实六一场景｜孩子拿到礼物的前30秒</div>
+            <div class="cc-body">节日当天真实测评：拆箱 → 初次上手 → 30分钟后仍在专注。这套玩具的精妙在于它不依赖家长陪玩，孩子自己能进入节奏……</div>
+            <div class="cc-footer">
+              <span class="cc-status"><span class="cc-status-dot draft"></span>草稿</span>
+              <span class="cc-wordcount">724 字</span>
+            </div>
+          </div>
+
+          <div class="copy-card" onclick="openDrawer('draft4')">
+            <div class="cc-head">
+              <span class="cc-platform dy">抖音</span>
+              <span class="cc-type">开箱脚本</span>
+              <span class="cc-seq">#seq 4</span>
+            </div>
+            <div class="cc-title">【开箱脚本】六一惊喜礼物 · 15秒钩子版</div>
+            <div class="cc-body">0-3s：孩子眼神镜头 + "猜猜妈妈送了什么"<br>3-8s：拆箱节奏快剪，落在关键部件<br>8-15s：孩子开始玩 → 专注镜头 → 品牌落版……</div>
+            <div class="cc-footer">
+              <span class="cc-status"><span class="cc-status-dot review"></span>审核中</span>
+              <span class="cc-wordcount">420 字</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="copy-section-title">Recently Tapped Knowledge</div>
+        <div class="tool-row" style="margin-top: 4px;">
+          <span class="tool-chip"><span class="tool-chip-icon" style="color:var(--purple)"></span>益智玩具 · 家长决策模型</span>
+          <span class="tool-chip"><span class="tool-chip-icon" style="color:var(--purple)"></span>小红书种草结构库</span>
+          <span class="tool-chip"><span class="tool-chip-icon" style="color:var(--purple)"></span>六一节日话术 · 2024</span>
+          <span class="tool-chip"><span class="tool-chip-icon" style="color:var(--purple)"></span>品牌 tone · CDSS</span>
+          <span class="tool-chip"><span class="tool-chip-icon" style="color:var(--purple)"></span>28-40岁家长画像</span>
+        </div>
+      </div>
+
+      <!-- ===== STRATEGY VIEW ===== -->
+      <div class="strategy-view" id="view-strategy">
+        <div class="stage-header">
+          <div class="stage-title">策略方案 · 内容总纲</div>
+          <div class="stage-subtitle">STRATEGIST · R1</div>
+          <div class="stage-meta">
+            <span>渠道 <strong>3</strong></span>
+            <span>篇目 <strong>4</strong></span>
+            <span>KPI <strong>认知→转化</strong></span>
+          </div>
+        </div>
+
+        <div class="plan-hero">
+          <div class="plan-kicker">CAMPAIGN STRATEGY · 电商大促</div>
+          <div class="plan-title">围绕六一完成家长认知建立、种草转化和购买承接</div>
+          <div class="plan-tagline">用公众号建立教育价值信任，用小红书强化真实种草与场景代入，用抖音完成开箱。目标：在促销窗口内形成有效转化。</div>
+        </div>
+
+        <div class="plan-grid">
+          <div class="plan-block">
+            <div class="pb-label">Target Audience</div>
+            <div class="pb-value"><strong>28-40岁</strong>家长，关注孩子陪伴与能力成长，节日期待仪式感、警惕"吃灰礼物"</div>
+          </div>
+          <div class="plan-block">
+            <div class="pb-label">Core Insight</div>
+            <div class="pb-value">选益智玩具的真正决策点，不是外观而是<strong>"玩多久、学到什么"</strong>——家长要的是教育价值承诺</div>
+          </div>
+          <div class="plan-block">
+            <div class="pb-label">Brand Tone</div>
+            <div class="pb-value">专业而亲切，拒绝强推，依托<strong>场景 + 证据</strong>做信任建立</div>
+          </div>
+          <div class="plan-block">
+            <div class="pb-label">KPI Funnel</div>
+            <div class="pb-value">认知建立 → 种草 → 场景代入 → <strong>开箱承接转化</strong></div>
+          </div>
+        </div>
+
+        <div class="copy-section-title" style="margin-top:32px">Channel Plan</div>
+        <div style="background: var(--bg-1); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;">
+          <div class="channel-row">
+            <div class="channel-name">公众号</div>
+            <div class="channel-role">长文 · 教育价值信任建立 · 权威背书</div>
+            <div class="channel-count">1 篇</div>
+          </div>
+          <div class="channel-row">
+            <div class="channel-name">小红书</div>
+            <div class="channel-role">对比种草 + 真实场景笔记 · 28-40 家长决策路径</div>
+            <div class="channel-count">2 篇</div>
+          </div>
+          <div class="channel-row">
+            <div class="channel-name">抖音</div>
+            <div class="channel-role">开箱脚本 · 15秒钩子 · 转化落点</div>
+            <div class="channel-count">1 篇</div>
+          </div>
+        </div>
+
+        <div class="tool-row" style="margin-top:24px">
+          <span class="tool-row-label">TOOLS ▸</span>
+          <span class="tool-chip" onclick="openDrawer('read_project')"><span class="tool-chip-icon" style="color:var(--info)"></span>read_project</span>
+          <span class="tool-chip" onclick="openDrawer('write_project')"><span class="tool-chip-icon"></span>write_project · strategy</span>
+          <span class="tool-chip" onclick="openDrawer('search_knowledge')"><span class="tool-chip-icon" style="color:var(--purple)"></span>search_knowledge · 5×</span>
+        </div>
+      </div>
+
+      <!-- ===== REVIEW VIEW ===== -->
+      <div class="review-view" id="view-review">
+        <div class="stage-header">
+          <div class="stage-title">审核报告 · 4 篇产出</div>
+          <div class="stage-subtitle">REVIEWER · R3</div>
+          <div class="stage-meta">
+            <span>通过 <strong>2</strong></span>
+            <span>待修订 <strong>1</strong></span>
+            <span>问题 <strong>1</strong></span>
+          </div>
+        </div>
+
+        <div class="copy-section-title">Per-Draft Assessment</div>
+
+        <div class="review-item">
+          <div class="ri-check">✓</div>
+          <div class="ri-body">
+            <div class="ri-title">公众号｜六一儿童节给孩子选益智玩具，家长先看这3点</div>
+            <div class="ri-desc">结构完整，论据充分，品牌 tone 一致。建议直接交付。</div>
+          </div>
+          <button class="ri-action">APPROVE</button>
+        </div>
+
+        <div class="review-item">
+          <div class="ri-check">✓</div>
+          <div class="ri-body">
+            <div class="ri-title">小红书｜同样是六一礼物，为什么益智玩具套装更适合家长决策</div>
+            <div class="ri-desc">对比结构清晰，符合平台种草范式。可直接发布。</div>
+          </div>
+          <button class="ri-action">APPROVE</button>
+        </div>
+
+        <div class="review-item warn">
+          <div class="ri-check">!</div>
+          <div class="ri-body">
+            <div class="ri-title">小红书｜真实六一场景｜孩子拿到礼物的前30秒</div>
+            <div class="ri-desc">场景描述偏单薄，缺少家长自己的情绪钩子。建议补一段"送的时候我自己也紧张"。</div>
+          </div>
+          <button class="ri-action">REVISE</button>
+        </div>
+
+        <div class="review-item issue">
+          <div class="ri-check">×</div>
+          <div class="ri-body">
+            <div class="ri-title">抖音｜【开箱脚本】六一惊喜礼物 · 15秒钩子版</div>
+            <div class="ri-desc">0-3s 的孩子眼神镜头需求不明确；缺少转化落点的具体 CTA 文案。</div>
+          </div>
+          <button class="ri-action">REJECT</button>
+        </div>
+
+        <div class="tool-row" style="margin-top:24px">
+          <span class="tool-row-label">TOOLS ▸</span>
+          <span class="tool-chip"><span class="tool-chip-icon" style="color:var(--info)"></span>list_content</span>
+          <span class="tool-chip"><span class="tool-chip-icon" style="color:var(--info)"></span>read_project</span>
+          <span class="tool-chip"><span class="tool-chip-icon" style="color:var(--warn)"></span>request_human_review</span>
+          <span class="tool-chip"><span class="tool-chip-icon" style="color:var(--purple)"></span>read_knowledge · 品牌合规</span>
+        </div>
+      </div>
+
+      <!-- ===== ACCOUNT / PM placeholder ===== -->
+      <div class="copy-view" id="view-account" style="display:none">
+        <div class="stage-header">
+          <div class="stage-title">客户经理 · Brief 解读</div>
+          <div class="stage-subtitle">ACCOUNT · R1</div>
+        </div>
+        <div class="plan-hero">
+          <div class="plan-kicker">CLIENT BRIEF · CDSS</div>
+          <div class="plan-title">六一儿童节 · 益智玩具套装促销</div>
+          <div class="plan-tagline">客户希望在 5/25 - 6/1 完成一轮全渠道内容铺设，核心目标是促销窗口内的转化，兼顾品牌教育价值沉淀。</div>
+        </div>
+        <div class="plan-grid">
+          <div class="plan-block"><div class="pb-label">Client</div><div class="pb-value">CDSS</div></div>
+          <div class="plan-block"><div class="pb-label">Campaign</div><div class="pb-value">电商大促 · 六一节点</div></div>
+          <div class="plan-block"><div class="pb-label">Budget</div><div class="pb-value">待客户补充</div></div>
+          <div class="plan-block"><div class="pb-label">Timeline</div><div class="pb-value">5/25 - 6/1</div></div>
+        </div>
+      </div>
+
+      <div class="copy-view" id="view-pm" style="display:none">
+        <div class="stage-header">
+          <div class="stage-title">项目进度</div>
+          <div class="stage-subtitle">PROJECT MANAGER · R4</div>
+        </div>
+        <div class="timeline-strip" style="margin-top:24px">
+          <span class="ts-node"><span class="ts-node-dot"></span>Brief 解读 · 完成</span>
+          <span class="ts-arrow">→</span>
+          <span class="ts-node"><span class="ts-node-dot"></span>策略方案 · 完成</span>
+          <span class="ts-arrow">→</span>
+          <span class="ts-node current"><span class="ts-node-dot"></span>文案 · 4/4</span>
+          <span class="ts-arrow">→</span>
+          <span class="ts-node"><span class="ts-node-dot"></span>审核 · 2/4</span>
+          <span class="ts-arrow">→</span>
+          <span class="ts-node"><span class="ts-node-dot"></span>交付</span>
+        </div>
+        <div class="copy-section-title">Milestones</div>
+        <div class="copy-grid">
+          <div class="copy-card"><div class="cc-title">M1 · Brief 共识</div><div class="cc-body">客户需求、目标、预算、时间线对齐完毕。</div></div>
+          <div class="copy-card"><div class="cc-title">M2 · 策略定稿</div><div class="cc-body">三渠道内容分工、信息漏斗、KPI 明确。</div></div>
+          <div class="copy-card"><div class="cc-title">M3 · 产出完成</div><div class="cc-body">4 篇内容已交付，其中 2 篇通过审核。</div></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ============ OLD STAGE (for compare) ============ -->
+    <div class="old-stage">
+      <div style="margin-bottom:16px;padding:12px 16px;background:var(--bg-1);border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text-3);font-family:'JetBrains Mono', monospace;">
+        // BEFORE · 线性堆叠 · 每个工具调用占一整块 · 产出和噪音视觉权重一致
+      </div>
+      <div class="old-bubble green">
+        <div class="old-head">⚙ 角色切换</div>
+        <div class="old-content">文案 开始工作</div>
+      </div>
+      <div class="old-bubble green">
+        <div class="old-head">⚙ 调用 READ_PROJECT · R1</div>
+        <div class="old-content">client_name、project_type、brand_tone、dept_style、status、strategy</div>
+      </div>
+      <div class="old-bubble purple">
+        <div class="old-head">↳ READ_PROJECT 返回 · R1</div>
+        <div class="old-content">{ "client_name": "cdss", "project_type": "电商大促", ... "status": "策略中", "strategy": "..." }
+<h3>内容策略方案</h3>
+<h4>1. 策略概述</h4>
+• 项目名称：cdss 六一儿童节儿童益智玩具套装促销内容项目<br>
+• 项目类型：电商大促<br>
+• 策略目标：围绕六一节点完成家长认知建立、种草转化和购买承接……</div>
+      </div>
+      <div class="old-bubble green"><div class="old-head">⚙ 调用 LIST_CONTENT · R1</div><div class="old-content">—</div></div>
+      <div class="old-bubble purple">
+        <div class="old-head">↳ LIST_CONTENT 返回 · R1</div>
+        <div class="old-content">[ { "record_id": "recvgYM0Dx6Rav", "project_name": "cdss", "seq": 4, "title": "同样是六一礼物，为什么益智玩具套装更适合家长决策", "platform": "小红书", "content_type": "对比种草笔记", "key_point": "通过礼物选择场景对比，突出益智玩具套装在实用性、陪伴性和节日仪式感上的优势", "target_audience": "28-40岁家长", "draft": "", "word_co…</div>
+      </div>
+      <div class="old-bubble green"><div class="old-head">⚙ 调用 UPDATE_STATUS · R1</div><div class="old-content">撰写中</div></div>
+      <div class="old-bubble blue"><div class="old-head">↳ UPDATE_STATUS 返回 · R1</div><div class="old-content">状态已更新：策略中 → 撰写中</div></div>
+      <div class="old-bubble green">
+        <div class="old-head">⚙ 调用 WRITE_CONTENT · R2</div>
+        <div class="old-content" style="font-family:'IBM Plex Sans',sans-serif; color:var(--text-1)">
+          <h3 style="font-size:16px">六一儿童节给孩子选益智玩具，家长先看这3点</h3>
+          六一快到了，很多家长都会遇到同一个问题：礼物到底怎么选，才不会买回去吃灰？<br>
+          比起只看"好不好看""孩子会不会一时喜欢"，真正值得慎重考虑的，是这份礼物能不能玩得久……
+          <div style="margin-top:10px;color:var(--text-4);font-size:11px">（注意：这里把完整文案又重复展示了一次 ← 问题点）</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ SIDEBAR ============ -->
+    <div class="sidebar">
+      <div class="side-section">
+        <div class="side-title"><span>共享记忆 / 项目主线</span><span class="count">3/5</span></div>
+        <div class="progress-item done"><span class="progress-dot done">✓</span>Brief 解读</div>
+        <div class="progress-item done"><span class="progress-dot done">✓</span>策略方案</div>
+        <div class="progress-item current"><span class="progress-dot current"></span>文案撰写</div>
+        <div class="progress-item"><span class="progress-dot"></span>审核总评</div>
+        <div class="progress-item"><span class="progress-dot"></span>交付摘要</div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-title"><span>工具调用日志</span><span class="count">76</span></div>
+        <div class="audit-log" id="auditLog">
+          <div class="audit-entry ok"><span class="audit-time">14:02</span><span class="audit-name">write_content → seq_4</span><span class="audit-dur">1.8s</span></div>
+          <div class="audit-entry ok"><span class="audit-time">14:01</span><span class="audit-name">write_content → seq_3</span><span class="audit-dur">2.1s</span></div>
+          <div class="audit-entry warn"><span class="audit-time">14:01</span><span class="audit-name">update_status</span><span class="audit-dur">12ms</span></div>
+          <div class="audit-entry ok"><span class="audit-time">14:00</span><span class="audit-name">write_content → seq_2</span><span class="audit-dur">1.6s</span></div>
+          <div class="audit-entry info"><span class="audit-time">14:00</span><span class="audit-name">search_knowledge</span><span class="audit-dur">420ms</span></div>
+          <div class="audit-entry ok"><span class="audit-time">13:59</span><span class="audit-name">write_content → seq_1</span><span class="audit-dur">1.9s</span></div>
+          <div class="audit-entry info"><span class="audit-time">13:59</span><span class="audit-name">list_content</span><span class="audit-dur">89ms</span></div>
+          <div class="audit-entry info"><span class="audit-time">13:58</span><span class="audit-name">read_project</span><span class="audit-dur">142ms</span></div>
+          <div class="audit-entry warn"><span class="audit-time">13:58</span><span class="audit-name">update_status · 撰写中</span><span class="audit-dur">14ms</span></div>
+          <div class="audit-entry info"><span class="audit-time">13:57</span><span class="audit-name">read_knowledge · tone</span><span class="audit-dur">310ms</span></div>
+        </div>
+      </div>
+
+      <div class="side-section">
+        <div class="side-title"><span>工具调用统计</span><span class="count">76</span></div>
+        <div class="tool-stat"><div class="ts-bar" style="transform:scaleX(1)"></div><span class="ts-name">write_content</span><span class="ts-count">31</span></div>
+        <div class="tool-stat"><div class="ts-bar" style="transform:scaleX(0.35)"></div><span class="ts-name">search_knowledge</span><span class="ts-count">11</span></div>
+        <div class="tool-stat"><div class="ts-bar" style="transform:scaleX(0.26)"></div><span class="ts-name">send_message</span><span class="ts-count">8</span></div>
+        <div class="tool-stat"><div class="ts-bar" style="transform:scaleX(0.22)"></div><span class="ts-name">read_project</span><span class="ts-count">7</span></div>
+        <div class="tool-stat"><div class="ts-bar" style="transform:scaleX(0.16)"></div><span class="ts-name">read_knowledge</span><span class="ts-count">5</span></div>
+        <div class="tool-stat"><div class="ts-bar" style="transform:scaleX(0.16)"></div><span class="ts-name">list_content</span><span class="ts-count">5</span></div>
+        <div class="tool-stat"><div class="ts-bar" style="transform:scaleX(0.13)"></div><span class="ts-name">write_project</span><span class="ts-count">4</span></div>
+        <div class="tool-stat"><div class="ts-bar" style="transform:scaleX(0.13)"></div><span class="ts-name">update_status</span><span class="ts-count">4</span></div>
+        <div class="tool-stat"><div class="ts-bar" style="transform:scaleX(0.03)"></div><span class="ts-name">request_human_review</span><span class="ts-count">1</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ DRAWER ============ -->
+<div class="backdrop" id="backdrop" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-head">
+    <div class="drawer-title" id="drawerTitle">tool_call</div>
+    <div class="drawer-sub" id="drawerSub">R1 · 142ms</div>
+    <button class="drawer-close" onclick="closeDrawer()">×</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</div>
+
+<!-- ============ DESIGN NOTES BUTTON ============ -->
+<button class="notes-btn" onclick="toggleNotes()">★ 设计笔记</button>
+
+<script>
+// ========== Role tab switching ==========
+const viewMap = {
+  account: 'view-account',
+  strategy: 'view-strategy',
+  copy: 'view-copy',
+  review: 'view-review',
+  pm: 'view-pm'
+};
+
+document.querySelectorAll('.role-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.role-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const role = tab.dataset.role;
+    Object.values(viewMap).forEach(id => {
+      document.getElementById(id).style.display = 'none';
+    });
+    const target = document.getElementById(viewMap[role]);
+    target.style.display = 'block';
+  });
+});
+
+// ========== Mode switching ==========
+function setMode(mode) {
+  const app = document.getElementById('app');
+  document.querySelectorAll('.view-toggle button').forEach(b => b.classList.remove('active'));
+  if (mode === 'old') {
+    app.classList.add('old-mode');
+    document.querySelectorAll('.view-toggle button')[1].classList.add('active');
+  } else {
+    app.classList.remove('old-mode');
+    document.querySelectorAll('.view-toggle button')[0].classList.add('active');
+  }
+}
+
+// ========== Drawer ==========
+const drawerContent = {
+  read_project: {
+    title: 'read_project()',
+    sub: 'R1 · 142ms · ok',
+    body: `<div class="dr-section">
+      <div class="dr-label">REQUEST · params</div>
+      <pre class="dr-code"><span class="p">{</span>
+  <span class="k">"fields"</span><span class="p">:</span> <span class="p">[</span><span class="s">"client_name"</span><span class="p">,</span> <span class="s">"project_type"</span><span class="p">,</span> <span class="s">"brand_tone"</span><span class="p">,</span> <span class="s">"dept_style"</span><span class="p">,</span> <span class="s">"status"</span><span class="p">,</span> <span class="s">"strategy"</span><span class="p">]</span>
+<span class="p">}</span></pre>
+    </div>
+    <div class="dr-section">
+      <div class="dr-label">RESPONSE · 返回值</div>
+      <pre class="dr-code"><span class="p">{</span>
+  <span class="k">"client_name"</span><span class="p">:</span> <span class="s">"cdss"</span><span class="p">,</span>
+  <span class="k">"project_type"</span><span class="p">:</span> <span class="s">"电商大促"</span><span class="p">,</span>
+  <span class="k">"brand_tone"</span><span class="p">:</span> <span class="s">""</span><span class="p">,</span>
+  <span class="k">"dept_style"</span><span class="p">:</span> <span class="s">""</span><span class="p">,</span>
+  <span class="k">"status"</span><span class="p">:</span> <span class="s">"策略中"</span><span class="p">,</span>
+  <span class="k">"strategy"</span><span class="p">:</span> <span class="s">"围绕六一节点完成家长认知建立..."</span>
+<span class="p">}</span></pre>
+    </div>`
+  },
+  list_content: {
+    title: 'list_content()',
+    sub: 'R1 · 89ms · 4 rows',
+    body: `<div class="dr-section">
+      <div class="dr-label">RESPONSE · 产出列表</div>
+      <pre class="dr-code"><span class="p">[</span>
+  <span class="p">{</span>
+    <span class="k">"record_id"</span><span class="p">:</span> <span class="s">"recvgYM0Dx6Rav"</span><span class="p">,</span>
+    <span class="k">"seq"</span><span class="p">:</span> <span class="n">4</span><span class="p">,</span>
+    <span class="k">"title"</span><span class="p">:</span> <span class="s">"同样是六一礼物，为什么益智玩具套装更适合家长决策"</span><span class="p">,</span>
+    <span class="k">"platform"</span><span class="p">:</span> <span class="s">"小红书"</span><span class="p">,</span>
+    <span class="k">"content_type"</span><span class="p">:</span> <span class="s">"对比种草笔记"</span><span class="p">,</span>
+    <span class="k">"target_audience"</span><span class="p">:</span> <span class="s">"28-40岁家长"</span>
+  <span class="p">},</span>
+  <span class="p">... 3 more</span>
+<span class="p">]</span></pre>
+    </div>`
+  },
+  search_knowledge: {
+    title: 'search_knowledge()',
+    sub: 'R1-R2 · 3 calls · avg 420ms',
+    body: `<div class="dr-section">
+      <div class="dr-label">CALL 1 · query</div>
+      <pre class="dr-code"><span class="s">"益智玩具 家长决策模型"</span></pre>
+    </div>
+    <div class="dr-section">
+      <div class="dr-label">CALL 2 · query</div>
+      <pre class="dr-code"><span class="s">"小红书种草结构 对比笔记"</span></pre>
+    </div>
+    <div class="dr-section">
+      <div class="dr-label">CALL 3 · query</div>
+      <pre class="dr-code"><span class="s">"28-40岁家长 节日情绪 画像"</span></pre>
+    </div>`
+  },
+  write_content: {
+    title: 'write_content()',
+    sub: 'R2 · 4 calls · avg 1.85s',
+    body: `<div class="dr-section">
+      <div class="dr-label">INVOKED · 4 次</div>
+      <pre class="dr-code">seq_1  →  <span class="s">"六一儿童节给孩子选益智玩具..."</span>   <span class="p">1.9s</span>
+seq_2  →  <span class="s">"同样是六一礼物，为什么..."</span>       <span class="p">1.6s</span>
+seq_3  →  <span class="s">"真实六一场景｜孩子拿到礼物..."</span>   <span class="p">2.1s</span>
+seq_4  →  <span class="s">"【开箱脚本】六一惊喜礼物..."</span>     <span class="p">1.8s</span></pre>
+    </div>
+    <div class="dr-section">
+      <div class="dr-label">产出内容 · 见主面板文案卡片</div>
+      <div style="color:var(--text-3);font-size:12px;">工具 bubble 不再重复渲染文案正文，正文作为一等产出显示在主区域。</div>
+    </div>`
+  },
+  update_status: {
+    title: 'update_status()',
+    sub: 'R1 · 14ms',
+    body: `<div class="dr-section">
+      <div class="dr-label">STATE TRANSITION</div>
+      <pre class="dr-code"><span class="p">{</span>
+  <span class="k">"from"</span><span class="p">:</span> <span class="s">"策略中"</span><span class="p">,</span>
+  <span class="k">"to"</span><span class="p">:</span> <span class="s">"撰写中"</span>
+<span class="p">}</span></pre>
+    </div>`
+  },
+  write_project: {
+    title: 'write_project()',
+    sub: 'R1 · 240ms',
+    body: `<div class="dr-section">
+      <div class="dr-label">PATCH · strategy field</div>
+      <pre class="dr-code"><span class="p">{</span>
+  <span class="k">"strategy"</span><span class="p">:</span> <span class="s">"围绕六一节点完成家长..."</span>
+<span class="p">}</span></pre>
+    </div>`
+  },
+  draft1: {
+    title: '文案 · seq 1',
+    sub: '公众号 · 1,247 字',
+    body: `<div class="dr-section">
+      <div class="dr-label">Title</div>
+      <div style="font-family:'IBM Plex Serif', serif; font-size: 18px; font-weight: 600; margin-bottom: 16px">六一儿童节给孩子选益智玩具，家长先看这3点</div>
+      <div class="dr-label">Body · 开篇</div>
+      <div style="font-size: 14px; line-height: 1.75; color: var(--text-2); white-space: pre-line;">六一快到了，很多家长都会遇到同一个问题：礼物到底怎么选，才不会买回去吃灰？
+
+比起只看"好不好看""孩子会不会一时喜欢"，真正值得慎重考虑的，是这份礼物能不能玩得久、用得上、孩子愿意反复拿出来。
+
+这篇文章想和你聊三个选择维度：能力长期训练、陪伴仪式感、以及和孩子当下兴趣的契合度。</div>
+    </div>`
+  },
+  draft2: { title: '文案 · seq 2', sub: '小红书 · 856 字', body: `<div class="dr-section"><div class="dr-label">Title</div><div style="font-family:'IBM Plex Serif', serif; font-size: 18px; font-weight: 600;">同样是六一礼物，为什么益智玩具套装更适合家长决策</div></div>` },
+  draft3: { title: '文案 · seq 3', sub: '小红书 · 724 字', body: `<div class="dr-section"><div class="dr-label">Title</div><div style="font-family:'IBM Plex Serif', serif; font-size: 18px; font-weight: 600;">真实六一场景｜孩子拿到礼物的前30秒</div></div>` },
+  draft4: { title: '文案 · seq 4', sub: '抖音 · 420 字', body: `<div class="dr-section"><div class="dr-label">Script</div><pre class="dr-code">0-3s：孩子眼神镜头 + "猜猜妈妈送了什么"
+3-8s：拆箱节奏快剪，落在关键部件
+8-15s：孩子开始玩 → 专注镜头 → 品牌落版</pre></div>` }
+};
+
+function openDrawer(key) {
+  const data = drawerContent[key];
+  if (!data) return;
+  document.getElementById('drawerTitle').textContent = data.title;
+  document.getElementById('drawerSub').textContent = data.sub;
+  document.getElementById('drawerBody').innerHTML = data.body;
+  document.getElementById('drawer').classList.add('open');
+  document.getElementById('backdrop').classList.add('open');
+}
+
+function closeDrawer() {
+  document.getElementById('drawer').classList.remove('open');
+  document.getElementById('backdrop').classList.remove('open');
+}
+
+// ========== Design notes ==========
+function toggleNotes() {
+  const key = 'notes';
+  if (document.getElementById('drawerTitle').textContent === '★ 设计笔记' && document.getElementById('drawer').classList.contains('open')) {
+    closeDrawer();
+    return;
+  }
+  document.getElementById('drawerTitle').textContent = '★ 设计笔记';
+  document.getElementById('drawerSub').textContent = 'why this panel looks this way';
+  document.getElementById('drawerBody').innerHTML = `
+    <div class="dr-section">
+      <div class="dr-label">✱ 问题 01 · 霓虹彩条太吵</div>
+      <div style="font-size:13px;line-height:1.7;color:var(--text-2)">原面板每个卡片左边都有一条霓虹彩条（绿/紫/蓝），信息密度低但视觉噪音高。<br>新面板统一用单一青绿 <code style="background:var(--bg-2);padding:1px 5px;border-radius:3px;font-family:'JetBrains Mono',monospace;color:var(--accent)">#6ee7b7</code> 作 accent，彩条只在 hover 时出现。</div>
+    </div>
+    <div class="dr-section">
+      <div class="dr-label">✱ 问题 02 · 线性堆叠</div>
+      <div style="font-size:13px;line-height:1.7;color:var(--text-2)">每个工具调用占一整块 = 刷屏。<br>新方案：工具调用 → 一排可点击 <strong style="color:var(--accent)">chip</strong>，状态转移 → 顶部 <strong style="color:var(--accent)">timeline strip</strong>，文案产出 → <strong style="color:var(--accent)">瀑布流卡片</strong>。</div>
+    </div>
+    <div class="dr-section">
+      <div class="dr-label">✱ 问题 03 · 工具调用重复显示内容</div>
+      <div style="font-size:13px;line-height:1.7;color:var(--text-2)">WRITE_CONTENT bubble 和正式文案产出显示了同样的正文，浪费空间。<br>新方案：工具 chip 只保留元信息（调用次数、耗时），产出内容只在主卡片区渲染一次。</div>
+    </div>
+    <div class="dr-section">
+      <div class="dr-label">✱ 问题 04 · 角色不分重点</div>
+      <div style="font-size:13px;line-height:1.7;color:var(--text-2)">切换顶部角色 tab，主面板布局随之变化：<br>
+      • <strong>客户经理</strong> → brief 卡片<br>
+      • <strong>策略师</strong> → 策略大纲 + 渠道表<br>
+      • <strong>文案</strong> → 产出瀑布流（本页展示）<br>
+      • <strong>审核</strong> → checklist + 问题清单<br>
+      • <strong>项目经理</strong> → 里程碑 + timeline</div>
+    </div>
+    <div class="dr-section">
+      <div class="dr-label">✱ 交互彩蛋</div>
+      <div style="font-size:13px;line-height:1.7;color:var(--text-2)">• 点任意 tool chip → 右侧抽屉展开 request/response<br>• 点任意文案卡片 → 打开完整正文<br>• 顶栏右侧 <code style="background:var(--bg-2);padding:1px 5px;border-radius:3px;font-family:'JetBrains Mono',monospace">NEW / OLD</code> 切换可对比原版线性堆叠布局</div>
+    </div>
+    <div class="dr-section">
+      <div class="dr-label">✱ 字体选择</div>
+      <div style="font-size:13px;line-height:1.7;color:var(--text-2)">• <strong style="font-family:'IBM Plex Serif', serif">IBM Plex Serif</strong> → 文案标题（有编辑部感，配合内容产品气质）<br>• <strong>IBM Plex Sans</strong> → 正文<br>• <strong style="font-family:'JetBrains Mono', monospace">JetBrains Mono</strong> → 工具名、时间戳、ID（agentic 工程感）<br>避开 Inter / Roboto 这类烂大街选择。</div>
+    </div>`;
+  document.getElementById('drawer').classList.add('open');
+  document.getElementById('backdrop').classList.add('open');
+}
+
+// ESC to close
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeDrawer();
+});
+</script>
+</body>
+</html>

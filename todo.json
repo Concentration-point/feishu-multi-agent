@@ -1,0 +1,134 @@
+﻿{
+  "project": "飞书·智组（全案内容营销多智能体系统）",
+  "generated_at": "2026-04-16",
+  "phases": [
+    {
+      "id": "P1",
+      "name": "Bitable 共享记忆",
+      "status": "completed",
+      "tasks": [
+        {"id": "P1-T01", "title": "实现 TokenManager 单例 + 自动刷新", "status": "completed"},
+        {"id": "P1-T02", "title": "实现 BitableClient CRUD 封装", "status": "completed"},
+        {"id": "P1-T03", "title": "配置模块 config.py", "status": "completed"},
+        {"id": "P1-T04", "title": ".env.example 配置模板", "status": "completed"},
+        {"id": "P1-T05", "title": "ProjectMemory 项目主表语义化封装", "status": "completed"},
+        {"id": "P1-T06", "title": "ContentMemory 内容排期表语义化封装", "status": "completed"},
+        {"id": "P1-T07", "title": "阶段一集成测试", "status": "completed"}
+      ]
+    },
+    {
+      "id": "P2",
+      "name": "Agent 框架 + 工具系统",
+      "status": "completed",
+      "tasks": [
+        {"id": "P2-T01", "title": "ToolRegistry 自动发现 + AgentContext", "status": "completed"},
+        {"id": "P2-T02", "title": "read_project 工具", "status": "completed"},
+        {"id": "P2-T03", "title": "write_project 工具", "status": "completed"},
+        {"id": "P2-T04", "title": "update_status 工具（带状态机校验）", "status": "completed"},
+        {"id": "P2-T05", "title": "list_content 工具", "status": "completed"},
+        {"id": "P2-T06", "title": "create_content 工具", "status": "completed"},
+        {"id": "P2-T07", "title": "batch_create_content 工具", "status": "completed"},
+        {"id": "P2-T08", "title": "write_content 工具", "status": "completed"},
+        {"id": "P2-T09", "title": "soul.md 解析", "status": "completed"},
+        {"id": "P2-T10", "title": "共享知识加载", "status": "completed"},
+        {"id": "P2-T11", "title": "BaseAgent ReAct 循环引擎", "status": "completed"},
+        {"id": "P2-T12", "title": "Hook 自省蒸馏", "status": "completed"},
+        {"id": "P2-T13", "title": "经验注入加载", "status": "completed"},
+        {"id": "P2-T14", "title": "共享知识 · company.md", "status": "completed"},
+        {"id": "P2-T15", "title": "共享知识 · sop.md", "status": "completed"},
+        {"id": "P2-T16", "title": "共享知识 · quality_standards.md", "status": "completed"},
+        {"id": "P2-T17", "title": "客户经理 soul.md", "status": "completed"},
+        {"id": "P2-T18", "title": "策略师 soul.md", "status": "completed"},
+        {"id": "P2-T19", "title": "文案 soul.md", "status": "completed"},
+        {"id": "P2-T20", "title": "审核 soul.md", "status": "completed"},
+        {"id": "P2-T21", "title": "项目经理 soul.md", "status": "completed"},
+        {"id": "P2-T22", "title": "阶段二集成测试", "status": "completed", "notes": "已完成 D-04 / D-05 审计修复验证：requirements.txt 已补 pytest 与 pytest-asyncio，test_framework.py 的过时 stub 断言已改为真实工具行为校验；阶段二脚本式验收测试现通过 tests/conftest.py 显式排除，不再误被 pytest 收集。"}
+      ]
+    },
+    {
+      "id": "P3",
+      "name": "Orchestrator 全流程编排",
+      "status": "completed",
+      "tasks": [
+        {"id": "P3-T01", "title": "Orchestrator 流水线核心", "status": "completed"},
+        {"id": "P3-T02", "title": "审核驳回重试机制", "status": "completed"},
+        {"id": "P3-T03", "title": "经验统一沉淀逻辑", "status": "completed"},
+        {"id": "P3-T04", "title": "IM 广播集成", "status": "completed"},
+        {"id": "P3-T05", "title": "CLI 入口 · run 命令", "status": "completed"},
+        {"id": "P3-T06", "title": "CLI 入口 · sync 命令", "status": "completed"},
+        {"id": "P3-T07", "title": "全流程集成测试", "status": "completed"}
+      ]
+    },
+    {
+      "id": "P4",
+      "name": "知识库系统 + 后台同步",
+      "status": "completed",
+      "tasks": [
+        {"id": "P4-T01", "title": "knowledge/ 种子文档", "status": "completed"},
+        {"id": "P4-T02", "title": "search_knowledge 工具", "status": "completed"},
+        {"id": "P4-T03", "title": "read_knowledge 工具", "status": "completed", "notes": "已完成 D-01 审计修复：read_knowledge 增加 resolve() + is_relative_to() 路径边界校验，仅允许读取 knowledge/ 目录内文件。"},
+        {"id": "P4-T04", "title": "write_wiki 工具", "status": "completed", "notes": "已完成 D-02 审计修复：write_wiki 增加非法字符拦截与 resolve() + is_relative_to() 路径边界校验，仅允许写入 knowledge/wiki/ 目录内文件。"},
+        {"id": "P4-T05", "title": "飞书知识空间 API 封装", "status": "completed", "notes": "已完成 D-03 审计修复：update_doc_content 改为覆盖式写入，先清空旧 children 再写入新内容，避免重复同步时文档堆叠。"},
+        {"id": "P4-T06", "title": "WikiSyncService 后台同步", "status": "completed", "notes": "已完成 D-03 审计修复验证：sync 侧更新文档时已走覆盖模式，不再是纯追加写入。"},
+        {"id": "P4-T07", "title": "阶段四集成测试", "status": "completed"}
+      ]
+    },
+    {
+      "id": "P5",
+      "name": "IM 群聊",
+      "status": "completed",
+      "tasks": [
+        {"id": "P5-T01", "title": "FeishuIMClient 实现", "status": "completed"},
+        {"id": "P5-T02", "title": "send_message 工具完整实现", "status": "completed"},
+        {"id": "P5-T03", "title": "阶段五集成测试", "status": "completed", "notes": "已完成 D-04 审计修复验证：阶段五测试保留为脚本式验收测试，并通过 tests/conftest.py 显式排除，避免 pytest 误收集导致假失败。"}
+      ]
+    },
+    {
+      "id": "P6",
+      "name": "L2 经验池 + 自进化",
+      "status": "completed",
+      "tasks": [
+        {"id": "P6-T01", "title": "ExperienceManager 实现", "status": "completed"},
+        {"id": "P6-T02", "title": "get_experience 工具", "status": "completed"},
+        {"id": "P6-T03", "title": "阶段六集成测试", "status": "completed", "notes": "已完成 D-04 审计修复验证：阶段六测试保留为脚本式验收测试，并通过 tests/conftest.py 显式排除，避免 pytest 误收集导致假失败。"}
+      ]
+    },
+    {
+      "id": "P7",
+      "name": "Webhook + Demo 打磨",
+      "status": "in_progress",
+      "tasks": [
+        {"id": "P7-T01", "title": "FastAPI Webhook 服务", "status": "completed", "notes": "main.py 已支持 serve、/webhook/event、challenge、基础去重与异步触发。"},
+        {"id": "P7-T02", "title": "requirements.txt 补充 FastAPI 依赖", "status": "completed", "notes": "已补 fastapi 与 uvicorn[standard]。"},
+        {"id": "P7-T03", "title": "L0 工作记忆 working.py 实现", "status": "completed", "notes": "已提供 prompt 拼接、粗略 token 估算、消息窗口裁剪。"},
+        {"id": "P7-T04", "title": "飞书事件订阅配置文档", "status": "completed", "notes": ".env.example 已补 WEBHOOK 配置与接入说明。"},
+        {"id": "P7-T05", "title": "Demo 演示脚本", "status": "completed", "notes": "已新增 demo/run_demo.py，支持 --scene 与 --record-id。"},
+        {"id": "P7-T06", "title": "演示用 Brief 测试数据", "status": "completed", "notes": "已新增 电商大促 / 新品发布 / 品牌传播 三份预设。"},
+        {"id": "P7-T07", "title": "答辩 PPT 素材准备", "status": "pending"},
+        {"id": "P7-T08", "title": "README.md", "status": "completed", "notes": "已新增基础 README，覆盖安装、运行、Webhook 接入与扩展说明。"},
+        {"id": "P7-T09", "title": "阶段七 Webhook 测试", "status": "completed", "notes": "已完成 D-04 审计修复验证：python -m pytest tests -q --tb=short 当前可正常执行，tests/test_webhook.py 4 个 pytest 用例实跑通过。"},
+        {"id": "P7-T10", "title": "CLAUDE.md 更新阶段标注", "status": "pending"}
+      ]
+    }
+  ],
+  "summary": {
+    "total_tasks": 44,
+    "completed": 42,
+    "in_progress": 0,
+    "pending": 2,
+    "current_focus": [
+      "P7-T07 答辩 PPT 素材准备",
+      "P7-T10 CLAUDE.md 更新阶段标注"
+    ],
+    "notes": [
+      "Webhook 主链、README、demo 脚本、brief 预设、webhook 测试文件均已补齐。",
+      "当前运行环境缺 pytest，测试文件已落地但未执行。",
+      "仓库仍有部分历史中文乱码，后续建议统一清理。"
+    ]
+  }
+}
+
+
+
+
+
