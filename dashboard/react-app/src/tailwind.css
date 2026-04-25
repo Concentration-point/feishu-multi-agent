@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+/* 显式告诉 Tailwind v4 扫描 src 下所有 ts/tsx —— 避免 JIT 漏扫导致 arbitrary value 不生成 */
+@source "../src/**/*.{ts,tsx}";
+@source "./**/*.{ts,tsx}";
+
+@theme {
+  --color-bg-0: #0a0d0f;
+  --color-bg-1: #0f1416;
+  --color-bg-2: #141a1d;
+  --color-bg-3: #1a2124;
+
+  --color-border: #202a2e;
+  --color-border-soft: #1a2226;
+
+  --color-text-1: #e8ecef;
+  --color-text-2: #9aa5ab;
+  --color-text-3: #5f6d74;
+  --color-text-4: #3f4a50;
+
+  --color-accent: #6ee7b7;
+  --color-accent-dim: #10b981;
+  --color-accent-glow: rgba(110, 231, 183, 0.12);
+
+  --color-warn: #fbbf24;
+  --color-info: #60a5fa;
+  --color-danger: #f87171;
+  --color-purple: #a78bfa;
+
+  --font-sans: "IBM Plex Sans", sans-serif;
+  --font-serif: "IBM Plex Serif", serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --radius-sm: 6px;
+  --radius-lg: 10px;
+}
+
+/* ========== global base (一等公民：背景、字体、滚动行为) ========== */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg-0);
+  color: var(--color-text-1);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  margin: 0;
+  overflow: hidden;
+}
+
+/* ambient radial wash (复刻原型) */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 0%, rgba(16, 185, 129, 0.04), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(96, 165, 250, 0.03), transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* scrollbar (一致的细线样式) */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
+.scroll-none {
+  scrollbar-width: none;
+}
+.scroll-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* pulse keyframe — 给 brand-dot / current node 用 */
+@keyframes pua-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.animate-pua-pulse {
+  animation: pua-pulse 2.4s ease-in-out infinite;
+}
