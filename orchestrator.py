@@ -1,0 +1,1031 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from dataclasses import dataclass
+
+from agents.base import BaseAgent
+from config import (
+    EXPERIENCE_CONFIDENCE_THRESHOLD,
+    EXPERIENCE_MAX_PER_CATEGORY,
+    FEISHU_CHAT_ID,
+    FIELD_MAP_PROJECT as FP,
+    HUMAN_REVIEW_TIMEOUT,
+    LLM_API_KEY,
+    LLM_BASE_URL,
+    LLM_MODEL,
+    LLM_TIMEOUT_SECONDS,
+    REVIEW_MAX_RETRIES,
+    REVIEW_PASS_THRESHOLD_DEFAULT,
+    REVIEW_RED_FLAG_KEYWORDS,
+    REVIEW_STATUS_APPROVED,
+    REVIEW_STATUS_NEED_REVISE,
+    REVIEW_STATUS_PENDING,
+    REVIEW_STATUS_TIMEOUT,
+    REVIEW_THRESHOLDS_BY_PROJECT_TYPE,
+    STATUS_PENDING_REVIEW,
+)
+from dashboard.event_bus import EventBus
+from memory.experience import ExperienceManager
+from memory.project import BriefProject, ContentMemory, ProjectMemory
+
+
+logger = logging.getLogger(__name__)
+
+_ROLE_NAMES = {
+    "account_manager": "客户经理",
+    "strategist": "策略师",
+    "copywriter": "文案",
+    "reviewer": "审核",
+    "project_manager": "项目经理",
+}
+
+
+@dataclass
+class StageResult:
+    role_id: str
+    ok: bool
+    duration_sec: float
+    output: str = ""
+    error: str = ""
+
+
+def _contains_red_flag(text: str) -> bool:
+    normalized = (text or "").strip()
+    return any(keyword in normalized for keyword in REVIEW_RED_FLAG_KEYWORDS)
+
+
+class Orchestrator:
+    def __init__(self, record_id: str, event_bus: EventBus | None = None):
+        self.record_id = record_id
+        self._event_bus = event_bus
+        self.pipeline = [
+            "account_manager",
+            "strategist",
+            "copywriter",
+            "reviewer",
+            "project_manager",
+        ]
+        self.stage_results: list[StageResult] = []
+        self.reviewer_retries = 0
+        self._start_time = 0.0
+        self._review_threshold = REVIEW_PASS_THRESHOLD_DEFAULT
+        self._review_red_flag = ""
+
+    def _publish(self, event_type: str, payload: dict | None = None, *, agent_role: str = "", agent_name: str = "") -> None:
+        if self._event_bus is None:
+            return
+        try:
+            self._event_bus.publish(
+                self.record_id, event_type, payload,
+                agent_role=agent_role,
+                agent_name=agent_name,
+            )
+        except Exception:
+            pass
+
+    async def run(self) -> list[StageResult]:
+        self._start_time = time.perf_counter()
+        pending_experiences: list[dict] = []
+        self._review_threshold = await self._get_review_threshold()
+
+        pm = ProjectMemory(self.record_id)
+        try:
+            proj = await pm.load()
+        except Exception as exc:
+            logger.exception("加载项目失败")
+            print(f"[Orchestrator] 警告: 加载项目失败: {type(exc).__name__}: {exc}")
+            return self.stage_results
+
+        project_name = proj.client_name or "未知客户"
+        brief_summary = (proj.brief or "")[:200]
+
+        self._publish("pipeline.started", {
+            "project_name": project_name,
+            "brief": brief_summary,
+            "stages": list(self.pipeline),
+            "stage_names": {k: v for k, v in _ROLE_NAMES.items()},
+        })
+
+        # ── 分支：状态为「待人审」 → 恢复人审门禁，跳过 AM ──
+        if proj.status == STATUS_PENDING_REVIEW:
+            print(f"[Orchestrator] 检测到 status='待人审'，跳过 AM 直接进入恢复门禁")
+            await self._broadcast(
+                title="项目恢复",
+                content=(
+                    f"客户 **{project_name}** 状态为「待人审」，\n"
+                    f"基于已保留的 Brief 解读继续等待审核"
+                ),
+                color="blue",
+            )
+            gate_outcome = await self._enter_human_review_gate(resumed=True)
+            if gate_outcome != "approved":
+                await self._finalize_pipeline_halted(project_name, gate_outcome)
+                return self.stage_results
+            # 放行 → 从 strategist 开始跑
+            start_index = 2
+            stages_to_run = self.pipeline[1:]
+        else:
+            await self._broadcast(
+                title="新项目启动",
+                content=(
+                    f"客户 **{project_name}** 的 Brief 已接收，虚拟团队自动组建中\n\n"
+                    "客户经理 -> 策略师 -> 文案 -> 审核 -> 项目经理"
+                ),
+                color="purple",
+            )
+            start_index = 1
+            stages_to_run = self.pipeline[:]
+
+        prev_role: str = ""
+        for index, role_id in enumerate(stages_to_run, start=start_index):
+            role_name = _ROLE_NAMES.get(role_id, role_id)
+            prev_duration = self.stage_results[-1].duration_sec if self.stage_results else 0
+            self._publish("pipeline.stage_changed", {
+                "stage_index": index,
+                "stage_total": len(self.pipeline),
+                "current_role": role_id,
+                "current_name": role_name,
+                "prev_role": prev_role,
+                "prev_duration": prev_duration,
+            }, agent_role=role_id, agent_name=role_name)
+            prev_role = role_id
+
+            if role_id == "copywriter":
+                result, fanout_experiences = await self._run_copywriter_fanout(
+                    index=index,
+                    total=len(self.pipeline),
+                )
+                self.stage_results.append(result)
+                pending_experiences.extend(fanout_experiences)
+            else:
+                result, agent = await self._run_stage_with_agent(
+                    role_id,
+                    index=index,
+                    total=len(self.pipeline),
+                )
+                self.stage_results.append(result)
+
+                if agent and agent._pending_experience:
+                    pending_experiences.append(
+                        {
+                            "role_id": role_id,
+                            "card": agent._pending_experience,
+                            "agent": agent,
+                        }
+                    )
+
+            if result.ok:
+                summary = result.output[:200] if result.output else "已完成"
+                await self._broadcast(
+                    title=f"{role_name} 完成",
+                    content=f"耗时 {result.duration_sec:.1f}s\n\n{summary}",
+                    color="blue",
+                )
+            else:
+                await self._broadcast(
+                    title="流水线异常",
+                    content=f"阶段 **{role_name}** 执行失败\n\n`{result.error[:300]}`",
+                    color="red",
+                )
+
+            # ── AM 完成后触发人审门禁（非恢复路径）──
+            if role_id == "account_manager" and result.ok:
+                gate_outcome = await self._enter_human_review_gate(resumed=False)
+                if gate_outcome != "approved":
+                    await self._finalize_pipeline_halted(project_name, gate_outcome)
+                    return self.stage_results
+
+            # ── 文案完成后兜底：扫 draft 为空的行，单次 LLM 补写 ──
+            if role_id == "copywriter" and result.ok:
+                await self._ensure_copywriter_drafts(project_name)
+
+            if role_id == "reviewer":
+                await self._handle_reviewer_retries(
+                    index=index,
+                    total=len(self.pipeline),
+                    pending_experiences=pending_experiences,
+                )
+
+        total_time = time.perf_counter() - self._start_time
+        pass_rate = await self._get_review_pass_rate()
+        pass_rate = await self._reconcile_review_pass_rate(pass_rate)
+        pass_rate_display = f"{pass_rate:.0%}" if pass_rate is not None else "未知"
+        review_status = await self._get_project_review_status()
+        ok_count = sum(1 for item in self.stage_results if item.ok)
+        await self._broadcast(
+            title="项目交付就绪",
+            content=(
+                f"客户 **{project_name}** 全链路完成\n"
+                f"- 阶段完成: {ok_count}/{len(self.stage_results)}\n"
+                f"- 审核通过率: {pass_rate_display}\n"
+                f"- 审核阈值: {self._review_threshold:.0%}\n"
+                f"- 红线风险: {self._review_red_flag or '无'}\n"
+                f"- 人审状态: {review_status or '未知'}\n"
+                f"- 总耗时: {total_time:.1f}s"
+            ),
+            color="green",
+        )
+
+        self._publish("pipeline.completed", {
+            "total_time": total_time,
+            "ok_count": ok_count,
+            "total_stages": len(self.stage_results),
+            "pass_rate": pass_rate,
+            "status": "已完成",
+        })
+
+        await self._settle_experiences(pending_experiences, project_name, pass_rate)
+        return self.stage_results
+
+    async def _run_stage_with_agent(
+        self,
+        role_id: str,
+        *,
+        index: int,
+        total: int,
+    ) -> tuple[StageResult, BaseAgent | None]:
+        print("=" * 60)
+        print(f"[Orchestrator] 启动第 {index}/{total} 阶段: {role_id}")
+        print("=" * 60)
+
+        start = time.perf_counter()
+        try:
+            agent = BaseAgent(role_id=role_id, record_id=self.record_id, event_bus=self._event_bus)
+            output = await agent.run()
+            duration = time.perf_counter() - start
+            print(f"[Orchestrator] 阶段 {role_id} 完成，耗时 {duration:.2f} 秒")
+            return StageResult(role_id=role_id, ok=True, duration_sec=duration, output=output or ""), agent
+        except Exception as exc:
+            duration = time.perf_counter() - start
+            message = f"{type(exc).__name__}: {exc}"
+            print(f"[Orchestrator] 阶段 {role_id} 异常，耗时 {duration:.2f} 秒: {message}")
+            logger.exception("阶段 %s 执行异常", role_id)
+            return StageResult(role_id=role_id, ok=False, duration_sec=duration, error=message), None
+
+    async def _run_copywriter_fanout(
+        self,
+        *,
+        index: int,
+        total: int,
+    ) -> tuple[StageResult, list[dict]]:
+        """Copywriter 阶段 fan-out: 按 platform 分组并行子 Agent。
+
+        1. list_content 拉全部 rows，按 row.platform 分组，空值归「通用」
+        2. 每组 BaseAgent(task_filter={platform: X}) asyncio.gather 并行
+        3. gather(return_exceptions=True) 捕获失败组，串行重试 1 次
+        4. 所有子 agent 的 _pending_experience 全部收集并返回
+        5. 汇总成一个 StageResult(role_id=copywriter), ok = 全部子 agent 的 AND
+        """
+        print("=" * 60)
+        print(f"[Orchestrator] 启动第 {index}/{total} 阶段: copywriter (fan-out)")
+        print("=" * 60)
+
+        start = time.perf_counter()
+
+        # 1. 拉 rows 并按 platform 分组
+        try:
+            proj = await ProjectMemory(self.record_id).load()
+            rows = await ContentMemory().list_by_project(proj.client_name)
+        except Exception as exc:
+            duration = time.perf_counter() - start
+            message = f"fan-out 拉取 rows 失败: {type(exc).__name__}: {exc}"
+            logger.exception("fan-out 拉 rows 异常")
+            print(f"[Orchestrator] {message}")
+            return StageResult(
+                role_id="copywriter", ok=False,
+                duration_sec=duration, error=message,
+            ), []
+
+        groups: dict[str, list] = {}
+        for row in rows:
+            key = ((row.platform or "").strip()) or "通用"
+            groups.setdefault(key, []).append(row)
+
+        # 空结果预拦截 — 没有任何 row: 退化为单 agent 行为
+        if not groups:
+            print("[Orchestrator] fan-out: 项目下无 content rows, 退化为单 agent")
+            result, agent = await self._run_stage_with_agent(
+                "copywriter", index=index, total=total,
+            )
+            pending = []
+            if agent and agent._pending_experience:
+                pending.append({
+                    "role_id": "copywriter",
+                    "card": agent._pending_experience,
+                    "agent": agent,
+                })
+            return result, pending
+
+        # 审查 Q3: 空组不 spawn — groups 每个 key 都至少有 1 row
+        group_names = sorted(groups.keys())
+        total_rows = sum(len(v) for v in groups.values())
+        print(f"[Orchestrator] fan-out 分组: {group_names} (共 {total_rows} 行)")
+
+        # dashboard 预建 sub lane
+        self._publish("pipeline.copywriter_fanout_started", {
+            "groups": group_names,
+            "rows_per_group": {k: len(v) for k, v in groups.items()},
+            "concurrency_limit": 5,
+        }, agent_role="copywriter", agent_name="文案")
+
+        # 2. 创建子 agent — 每个 platform 一个
+        def _make_agent(platform: str) -> BaseAgent:
+            return BaseAgent(
+                role_id="copywriter",
+                record_id=self.record_id,
+                event_bus=self._event_bus,
+                task_filter={"platform": platform},
+            )
+
+        sub_agents: dict[str, BaseAgent] = {k: _make_agent(k) for k in group_names}
+
+        # 3. 并行执行 (return_exceptions 保证失败组不阻断其他)
+        parallel_start = time.perf_counter()
+        tasks = [sub_agents[k].run() for k in group_names]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        parallel_duration = time.perf_counter() - parallel_start
+        print(f"[Orchestrator] fan-out 并行执行完成, 耗时 {parallel_duration:.2f}s")
+
+        # 4. 失败组串行重试 1 次
+        final_status: dict[str, dict] = {}
+        for platform, result in zip(group_names, results):
+            if isinstance(result, BaseException):
+                logger.warning(
+                    "[fan-out] platform=%s 首次失败: %s: %s, 准备串行重试",
+                    platform, type(result).__name__, result,
+                )
+                print(f"[Orchestrator] 警告: platform={platform} 首次失败 {type(result).__name__}: {result}, 串行重试")
+                retry_agent = _make_agent(platform)
+                try:
+                    retry_output = await retry_agent.run()
+                    final_status[platform] = {
+                        "ok": True,
+                        "output": retry_output or "",
+                        "agent": retry_agent,
+                        "retried": True,
+                    }
+                    print(f"[Orchestrator] platform={platform} 重试成功")
+                except Exception as retry_exc:
+                    err_msg = f"{type(retry_exc).__name__}: {retry_exc}"
+                    logger.warning("[fan-out] platform=%s 重试失败: %s", platform, err_msg)
+                    print(f"[Orchestrator] platform={platform} 重试仍失败: {err_msg}")
+                    final_status[platform] = {
+                        "ok": False,
+                        "error": err_msg,
+                        "agent": retry_agent,
+                        "retried": True,
+                    }
+            else:
+                final_status[platform] = {
+                    "ok": True,
+                    "output": result or "",
+                    "agent": sub_agents[platform],
+                    "retried": False,
+                }
+
+        # 5. 聚合结果
+        all_ok = all(v["ok"] for v in final_status.values())
+        duration = time.perf_counter() - start
+        summary_lines = []
+        for platform in group_names:
+            st = final_status[platform]
+            tag = "OK" if st["ok"] else "FAIL"
+            if st["retried"]:
+                tag += "(retry)"
+            detail = (st.get("output") or "")[:80] if st["ok"] else st.get("error", "")
+            summary_lines.append(f"[{platform}] {tag}: {detail}")
+        stage_output = "fan-out 汇总:\n" + "\n".join(summary_lines)
+        failed = [p for p in group_names if not final_status[p]["ok"]]
+        stage_error = "" if not failed else "; ".join(
+            f"{p}: {final_status[p].get('error', '')}" for p in failed
+        )
+
+        # 6. 收集 pending experiences — 每子 agent 独立一条
+        pending_experiences: list[dict] = []
+        for platform in group_names:
+            ag = final_status[platform]["agent"]
+            if ag and ag._pending_experience:
+                pending_experiences.append({
+                    "role_id": "copywriter",
+                    "card": ag._pending_experience,
+                    "agent": ag,
+                    "task_filter": {"platform": platform},
+                })
+
+        ok_cnt = sum(1 for v in final_status.values() if v["ok"])
+        print(
+            f"[Orchestrator] fan-out 完成: {ok_cnt}/{len(group_names)} 平台成功, "
+            f"收集 {len(pending_experiences)} 条经验, 总耗时 {duration:.2f}s"
+        )
+
+        return StageResult(
+            role_id="copywriter",
+            ok=all_ok,
+            duration_sec=duration,
+            output=stage_output,
+            error=stage_error,
+        ), pending_experiences
+
+    async def _handle_reviewer_retries(
+        self,
+        *,
+        index: int,
+        total: int,
+        pending_experiences: list[dict],
+    ) -> None:
+        for attempt in range(1, REVIEW_MAX_RETRIES + 1):
+            pass_rate = await self._get_review_pass_rate()
+            pass_rate = await self._reconcile_review_pass_rate(pass_rate)
+            if pass_rate is None:
+                print("[Orchestrator] 警告: 无法读取审核通过率，跳过返工重试逻辑")
+                return
+            review_red_flag = await self._get_review_red_flag()
+            has_red_flag = bool(review_red_flag and review_red_flag.strip() and review_red_flag.strip() != "无")
+            self._review_red_flag = review_red_flag.strip() if review_red_flag and review_red_flag.strip() else "无"
+            if has_red_flag:
+                print(f"[Orchestrator] 警告: 审核结构化红线字段命中风险：{self._review_red_flag}，触发一票否决")
+            if pass_rate >= self._review_threshold and not has_red_flag:
+                print(f"[Orchestrator] 审核通过率 {pass_rate:.0%}，达到阈值 {self._review_threshold:.0%}，且无红线风险，继续进入下一阶段")
+                return
+
+            self.reviewer_retries += 1
+            self._publish("pipeline.rejection", {
+                "pass_rate": pass_rate,
+                "attempt": attempt,
+                "max_attempts": 2,
+            }, agent_role="reviewer", agent_name="审核")
+
+            print(
+                f"[Orchestrator] 警告: 审核通过率 {pass_rate:.0%} < {self._review_threshold:.0%} 或存在红线风险，"
+                f"触发返工重试 {attempt}/{REVIEW_MAX_RETRIES}，状态改回 '撰写中'"
+            )
+
+            review_status = await self._get_project_review_status()
+            await self._broadcast(
+                title="审核驳回，触发返工",
+                content=(
+                    f"通过率 **{pass_rate:.0%}**，阈值 **{self._review_threshold:.0%}**\n"
+                    f"红线风险：**{self._review_red_flag or '无'}**\n"
+                    f"人审状态：**{review_status or '未知'}**\n"
+                    f"文案将根据审核反馈修改，第 {attempt}/{REVIEW_MAX_RETRIES} 次重试"
+                ),
+                color="orange",
+            )
+
+            try:
+                pm = ProjectMemory(self.record_id)
+                await pm.update_status("撰写中")
+            except Exception as exc:
+                print(f"[Orchestrator] 警告: 状态回退失败: {type(exc).__name__}: {exc}")
+
+            # 返工重试复用 fan-out — 失败平台隔离，不波及其他平台
+            cw_result, cw_fanout_experiences = await self._run_copywriter_fanout(
+                index=index - 1,
+                total=total,
+            )
+            self.stage_results.append(cw_result)
+            pending_experiences.extend(cw_fanout_experiences)
+
+            rv_result, rv_agent = await self._run_stage_with_agent(
+                "reviewer",
+                index=index,
+                total=total,
+            )
+            self.stage_results.append(rv_result)
+            if rv_agent and rv_agent._pending_experience:
+                pending_experiences.append(
+                    {
+                        "role_id": "reviewer",
+                        "card": rv_agent._pending_experience,
+                        "agent": rv_agent,
+                    }
+                )
+
+        final_rate = await self._get_review_pass_rate()
+        final_rate = await self._reconcile_review_pass_rate(final_rate)
+        final_red_flag = await self._get_review_red_flag()
+        has_final_red_flag = bool(final_red_flag and final_red_flag.strip() and final_red_flag.strip() != "无")
+        self._review_red_flag = final_red_flag.strip() if final_red_flag and final_red_flag.strip() else "无"
+        if final_rate is None:
+            print("[Orchestrator] 警告: 重试后仍无法读取审核通过率，继续往下走")
+        elif final_rate < self._review_threshold or has_final_red_flag:
+            print(
+                f"[Orchestrator] 警告: 审核通过率 {final_rate:.0%}，阈值 {self._review_threshold:.0%}，"
+                "重试后仍未达标或仍存在红线风险，继续进入 project_manager，不再卡死流程"
+            )
+        else:
+            print(f"[Orchestrator] 审核通过率在重试后提升至 {final_rate:.0%}，达到阈值 {self._review_threshold:.0%}，继续进入下一阶段")
+
+    async def _enter_human_review_gate(self, *, resumed: bool) -> str:
+        """AM 之后的人审门禁，或从"待人审"恢复。
+
+        返回:
+            "approved"     → 放行，继续 pipeline 后续阶段
+            "need_revise"  → 人类要求修改，已落盘 human_feedback + status 回"解读中"
+            "timeout"      → 本轮超时，status 落"待人审"，下次触发可恢复
+            "skipped"      → 降级跳过（AUTO_APPROVE / 无群聊 / brief_analysis 空），等价 approved
+        """
+        from tools.request_human_review import poll_for_human_reply
+
+        pm = ProjectMemory(self.record_id)
+        try:
+            proj = await pm.load()
+        except Exception as exc:
+            logger.exception("门禁加载项目失败")
+            print(f"[Orchestrator] 警告: 门禁加载项目失败: {exc}")
+            return "approved"
+
+        brief_analysis = (proj.brief_analysis or "").strip()
+        if not brief_analysis:
+            print("[Orchestrator] 警告: brief_analysis 为空，跳过人审门禁")
+            return "skipped"
+
+        await pm.write_review_status(REVIEW_STATUS_PENDING)
+        self._publish("human_review.started", {"resumed": resumed})
+
+        previous_msg_id: str | None = None
+        prev_send_count = 0
+        try:
+            meta_prev = json.loads(proj.pending_meta or "{}")
+            previous_msg_id = meta_prev.get("msg_id") or None
+            prev_send_count = int(meta_prev.get("send_count", 0))
+        except Exception:
+            pass
+
+        result = await poll_for_human_reply(
+            brief_analysis,
+            previous_msg_id=previous_msg_id,
+        )
+        status = result.get("status", "")
+        feedback = (result.get("feedback") or "").strip()
+        new_msg_id = result.get("msg_id", "")
+        deadline = result.get("deadline", 0)
+        sent_at = result.get("sent_at", "")
+
+        meta_to_save = {
+            "msg_id": new_msg_id,
+            "deadline": deadline,
+            "send_count": prev_send_count + 1,
+            "sent_at": sent_at,
+        }
+        await pm.write_pending_meta(meta_to_save)
+
+        if status in ("approved", "skipped_auto_approve", "skipped_no_chat", "send_failed"):
+            await pm.write_review_status(REVIEW_STATUS_APPROVED)
+            await pm.clear_pending_state()
+            try:
+                await pm.update_status("策略中")
+            except Exception as exc:
+                print(f"[Orchestrator] 警告: 放行后更新状态失败: {exc}")
+            self._publish("human_review.resolved", {
+                "outcome": "approved", "feedback": feedback, "resumed": resumed,
+            })
+            await self._broadcast(
+                title="人审通过",
+                content=(
+                    f"审核人已确认 Brief 解读，项目进入策略阶段\n\n"
+                    f"{feedback[:200] or '（无额外意见）'}"
+                ),
+                color="green",
+            )
+            return "approved"
+
+        if status == "need_revise":
+            await pm.write_review_status(REVIEW_STATUS_NEED_REVISE)
+            await pm.write_human_feedback(feedback)
+            try:
+                await pm.update_status("解读中")
+            except Exception as exc:
+                print(f"[Orchestrator] 警告: 回退状态失败: {exc}")
+            self._publish("human_review.resolved", {
+                "outcome": "need_revise", "feedback": feedback, "resumed": resumed,
+            })
+            await self._broadcast(
+                title="审核要求修改",
+                content=(
+                    f"审核意见已落盘，本次流程结束。\n"
+                    f"下次触发本项目，客户经理会读取反馈重写解读。\n\n"
+                    f"反馈：{feedback[:300]}"
+                ),
+                color="orange",
+            )
+            return "need_revise"
+
+        # timeout
+        await pm.write_review_status(REVIEW_STATUS_TIMEOUT)
+        try:
+            await pm.update_status(STATUS_PENDING_REVIEW)
+        except Exception as exc:
+            print(f"[Orchestrator] 警告: 切换到待人审状态失败: {exc}")
+        self._publish("human_review.resolved", {
+            "outcome": "timeout", "feedback": feedback, "resumed": resumed,
+        })
+        await self._broadcast(
+            title="等待审核超时，项目已挂起",
+            content=(
+                f"本轮等待审核超过 {HUMAN_REVIEW_TIMEOUT} 秒上限。\n"
+                f"项目数据已完整保留，status=「待人审」。\n"
+                f"下次触发同一 record_id，将直接恢复到人审环节，无需重跑客户经理。"
+            ),
+            color="yellow",
+        )
+        return "timeout"
+
+    async def _ensure_copywriter_drafts(self, project_name: str) -> None:
+        """文案阶段后兜底：扫 content_rows，对 draft 为空的行用单次 LLM call 补写。
+
+        底层逻辑：
+          - 不走完整 ReAct，单次调 LLM 生成成稿（成本/延时最小化）
+          - 兜底补写只调 ContentMemory.write_draft，不进经验池、不经过审核工具
+          - 任何一条补写失败不影响其余，也不阻断主流程
+        """
+        try:
+            cm = ContentMemory()
+            rows = await cm.list_by_project(project_name)
+        except Exception as exc:
+            logger.exception("文案兜底读取内容行失败")
+            print(f"[Orchestrator] 警告: 文案兜底读行失败: {exc}")
+            return
+
+        empty_rows = [r for r in rows if not (r.draft or "").strip()]
+        if not empty_rows:
+            print(f"[Orchestrator] 文案兜底：{len(rows)} 条内容行全部有成稿，跳过")
+            return
+
+        print(
+            f"[Orchestrator] 文案兜底：{len(empty_rows)}/{len(rows)} 条内容行 draft 为空，启动 LLM 补写"
+        )
+        self._publish("copywriter.fallback.started", {
+            "empty_count": len(empty_rows),
+            "total_count": len(rows),
+        }, agent_role="copywriter", agent_name="文案")
+
+        try:
+            from openai import AsyncOpenAI
+            proj = await ProjectMemory(self.record_id).load()
+            client = AsyncOpenAI(
+                base_url=LLM_BASE_URL,
+                api_key=LLM_API_KEY,
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.exception("文案兜底初始化 LLM 失败")
+            print(f"[Orchestrator] 警告: 文案兜底初始化失败: {exc}")
+            return
+
+        filled = 0
+        for row in empty_rows:
+            try:
+                prompt = self._build_copy_fallback_prompt(proj, row)
+                resp = await client.chat.completions.create(
+                    model=LLM_MODEL,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是资深内容营销文案。按目标平台调性生成完整成稿，"
+                                "不要解释、不要使用 ``` 代码块包裹，直接输出正文。"
+                                "严禁医疗化、绝对化、虚假宣传用语。"
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                )
+                draft = (resp.choices[0].message.content or "").strip()
+                if not draft:
+                    continue
+                await cm.write_draft(row.record_id, draft, len(draft))
+                filled += 1
+                print(
+                    f"[Orchestrator] 补写成功 rid={row.record_id[:12]}... "
+                    f"title={row.title[:20]}... 字数={len(draft)}"
+                )
+            except Exception as exc:
+                print(
+                    f"[Orchestrator] 补写失败 rid={row.record_id[:12]}...: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        self._publish("copywriter.fallback.completed", {
+            "filled": filled,
+            "attempted": len(empty_rows),
+        }, agent_role="copywriter", agent_name="文案")
+
+        await self._broadcast(
+            title="文案补写兜底",
+            content=(
+                f"检测到 {len(empty_rows)}/{len(rows)} 条内容缺成稿，"
+                f"已自动补写 {filled} 条"
+            ),
+            color="blue" if filled == len(empty_rows) else "orange",
+        )
+
+    @staticmethod
+    def _build_copy_fallback_prompt(proj: BriefProject, row) -> str:
+        parts = [
+            "# 项目上下文",
+            f"- 客户: {proj.client_name}",
+        ]
+        if proj.project_type:
+            parts.append(f"- 项目类型: {proj.project_type}")
+        if proj.brand_tone:
+            parts.append(f"- 品牌调性: {proj.brand_tone}")
+        if proj.dept_style:
+            parts.append(f"- 部门风格: {proj.dept_style}")
+        parts += [
+            "",
+            "# 本条任务",
+            f"- 内容标题: {row.title or '未填'}",
+            f"- 目标平台: {row.platform or '未填'}",
+            f"- 内容类型: {row.content_type or '未填'}",
+            f"- 核心卖点: {row.key_point or '未填'}",
+            f"- 目标人群: {row.target_audience or '未填'}",
+            "",
+            "# 输出要求",
+            "- 直接输出完整成稿正文，不要任何解释",
+            "- 字数参考：小红书 400-800、抖音脚本 200-400、公众号 800-1500",
+            "- 正文顶部用 <!-- 对标参考 + 合规自检 --> HTML 注释占位（一行即可）",
+        ]
+        return "\n".join(parts)
+
+    async def _finalize_pipeline_halted(self, project_name: str, outcome: str) -> None:
+        """流程在门禁被中断时的收尾：事件、耗时、不做经验沉淀。"""
+        total_time = time.perf_counter() - self._start_time
+        ok_count = sum(1 for item in self.stage_results if item.ok)
+        self._publish("pipeline.halted", {
+            "total_time": total_time,
+            "ok_count": ok_count,
+            "total_stages": len(self.stage_results),
+            "outcome": outcome,
+            "project_name": project_name,
+        })
+        print(
+            f"[Orchestrator] 流程在人审门禁中断: outcome={outcome}, "
+            f"阶段完成 {ok_count}/{len(self.stage_results)}, 总耗时 {total_time:.1f}s"
+        )
+
+    async def _get_review_threshold(self) -> float:
+        try:
+            pm = ProjectMemory(self.record_id)
+            proj = await pm.load()
+            project_type = (proj.project_type or "").strip()
+            threshold = REVIEW_THRESHOLDS_BY_PROJECT_TYPE.get(project_type, REVIEW_PASS_THRESHOLD_DEFAULT)
+            try:
+                await pm.write_review_summary(
+                    proj.review_summary or "",
+                    float(proj.review_pass_rate or 0.0),
+                    threshold=threshold,
+                    red_flag=getattr(proj, "review_red_flag", "") or "",
+                )
+            except Exception:
+                pass
+            return threshold
+        except Exception as exc:
+            logger.exception("获取审核阈值失败")
+            print(f"[Orchestrator] 警告: 获取审核阈值失败: {type(exc).__name__}: {exc}")
+            return REVIEW_PASS_THRESHOLD_DEFAULT
+
+    async def _get_review_summary(self) -> str:
+        try:
+            pm = ProjectMemory(self.record_id)
+            proj = await pm.load()
+            return proj.review_summary or ""
+        except Exception as exc:
+            logger.exception("获取审核总评失败")
+            print(f"[Orchestrator] 警告: 获取审核总评失败: {type(exc).__name__}: {exc}")
+            return ""
+
+    async def _get_review_red_flag(self) -> str:
+        try:
+            pm = ProjectMemory(self.record_id)
+            proj = await pm.load()
+            return (proj.review_red_flag or "").strip()
+        except Exception as exc:
+            logger.exception("获取审核红线风险失败")
+            print(f"[Orchestrator] 警告: 获取审核红线风险失败: {type(exc).__name__}: {exc}")
+            return ""
+
+    async def _get_project_review_status(self) -> str:
+        try:
+            pm = ProjectMemory(self.record_id)
+            proj = await pm.load()
+            return getattr(proj, "review_status", "") or ""
+        except Exception as exc:
+            logger.exception("获取人审状态失败")
+            print(f"[Orchestrator] 警告: 获取人审状态失败: {type(exc).__name__}: {exc}")
+            return ""
+
+    async def _get_review_pass_rate(self) -> float | None:
+        try:
+            pm = ProjectMemory(self.record_id)
+            raw_fields = await pm._client.get_record(pm._table_id, self.record_id)
+            raw_value = raw_fields.get(FP["review_pass_rate"])
+            if raw_value in (None, "", []):
+                return 0.5
+            return float(raw_value)
+        except Exception as exc:
+            logger.exception("读取审核通过率失败")
+            print(f"[Orchestrator] 警告: 读取审核通过率失败: {type(exc).__name__}: {exc}")
+            return None
+
+    async def _compute_row_level_pass_rate(self) -> tuple[float | None, int, int]:
+        """按内容行级 review_status 实际统计通过率。
+
+        返回 (pass_rate, passed_count, total_count)。
+        total==0 时 pass_rate 返回 None，表示没有可用于汇总的行。
+        只承认 REVIEW_STATUS_APPROVED ("通过") 作为通过；空值、需修改、驳回、超时均不计入通过。
+        """
+        try:
+            project_name = await self._get_project_name()
+            if not project_name or project_name == "未知客户":
+                return None, 0, 0
+            cm = ContentMemory()
+            rows = await cm.list_by_project(project_name)
+            total = len(rows)
+            if total == 0:
+                return None, 0, 0
+            passed = sum(
+                1 for r in rows
+                if (r.review_status or "").strip() == REVIEW_STATUS_APPROVED
+            )
+            return passed / total, passed, total
+        except Exception as exc:
+            logger.exception("行级审核通过率统计失败")
+            print(f"[Orchestrator] 警告: 行级审核通过率统计失败: {type(exc).__name__}: {exc}")
+            return None, 0, 0
+
+    async def _reconcile_review_pass_rate(
+        self,
+        project_level_rate: float | None,
+    ) -> float | None:
+        """对齐项目级字段和行级统计，不一致时以行级为准并回写项目主表。"""
+        row_rate, passed, total = await self._compute_row_level_pass_rate()
+        if row_rate is None:
+            return project_level_rate
+
+        if project_level_rate is None:
+            print(
+                f"[Orchestrator] 项目级审核通过率为空，采用行级统计 {row_rate:.0%}"
+                f"（{passed}/{total}），回写项目主表"
+            )
+        elif abs(row_rate - project_level_rate) > 1e-3:
+            print(
+                f"[Orchestrator] 警告: 审核通过率口径不一致——项目级 {project_level_rate:.0%}"
+                f" vs 行级 {row_rate:.0%}（{passed}/{total}），以行级为准并回写项目主表"
+            )
+        else:
+            return project_level_rate
+
+        try:
+            pm = ProjectMemory(self.record_id)
+            proj = await pm.load()
+            await pm.write_review_summary(
+                proj.review_summary or "",
+                row_rate,
+                threshold=float(getattr(proj, "review_threshold", 0.0) or 0.0),
+                red_flag=getattr(proj, "review_red_flag", "") or "",
+            )
+        except Exception as exc:
+            logger.exception("回写审核通过率失败")
+            print(f"[Orchestrator] 警告: 回写审核通过率失败: {type(exc).__name__}: {exc}")
+
+        return row_rate
+
+    async def _get_project_name(self) -> str:
+        try:
+            pm = ProjectMemory(self.record_id)
+            proj = await pm.load()
+            return proj.client_name or "未知客户"
+        except Exception:
+            return "未知客户"
+
+    async def _settle_experiences(
+        self,
+        pending: list[dict],
+        project_name: str,
+        pass_rate: float | None,
+    ) -> None:
+        if not pending:
+            print("[Orchestrator] 无经验卡片需要沉淀")
+            return
+
+        deduped: dict[str, dict] = {}
+        for item in pending:
+            deduped[item["role_id"]] = item
+        unique_pending = list(deduped.values())
+
+        em = ExperienceManager()
+        total = len(unique_pending)
+        passed = 0
+        merged_count = 0
+        settled = 0
+
+        for item in unique_pending:
+            role_id = item["role_id"]
+            card = item["card"]
+            agent_ref: BaseAgent | None = item.get("agent")
+
+            stage_ok = any(result.ok and result.role_id == role_id for result in self.stage_results)
+
+            knowledge_cited = False
+            if agent_ref and hasattr(agent_ref, "_messages"):
+                for message in agent_ref._messages:
+                    if not isinstance(message, dict) or message.get("role") != "assistant":
+                        continue
+                    for tool_call in message.get("tool_calls") or []:
+                        if not isinstance(tool_call, dict):
+                            continue
+                        fn_name = tool_call.get("function", {}).get("name", "")
+                        if fn_name in {"search_knowledge", "get_experience"}:
+                            knowledge_cited = True
+                            break
+                    if knowledge_cited:
+                        break
+
+            no_rework = role_id != "copywriter" or self.reviewer_retries == 0
+            confidence = self._calc_confidence(
+                pass_rate=pass_rate,
+                task_completed=stage_ok,
+                no_rework=no_rework,
+                knowledge_cited=knowledge_cited,
+            )
+
+            if confidence < EXPERIENCE_CONFIDENCE_THRESHOLD:
+                logger.info(
+                    "[经验沉淀] 跳过 %s，置信度 %.2f < %.2f",
+                    role_id,
+                    confidence,
+                    EXPERIENCE_CONFIDENCE_THRESHOLD,
+                )
+                continue
+
+            passed += 1
+            try:
+                category = card.get("category", "未分类")
+                lesson = str(card.get("lesson", "") or "")
+                card.setdefault("title", f"{category} - {role_id} - {lesson[:18]}")
+                card["source_project"] = project_name
+                card["source_run"] = self.record_id
+                card["source_stage"] = role_id
+                card["review_status"] = await self._get_project_review_status()
+                existing = await em.check_dedup(role_id, category, lesson=lesson)
+                if existing and lesson:
+                    logger.info("[经验沉淀] %s/%s 命中去重候选 %d 条", role_id, category, len(existing))
+
+                if len(existing) >= EXPERIENCE_MAX_PER_CATEGORY:
+                    merged = await em.merge_experiences(existing, card)
+                    if merged:
+                        card = merged
+                        confidence = merged.get("_merged_confidence", confidence)
+                        merged_count += 1
+
+                saved = await em.save_experience(card, confidence, project_name)
+                # Agent 未自主写入 wiki 时，Orchestrator 兜底写入
+                wiki_saved = None
+                if not getattr(agent_ref, "_wiki_written", False):
+                    wiki_saved = await em.save_to_wiki(card, confidence)
+                if saved or wiki_saved:
+                    settled += 1
+                else:
+                    logger.info("[经验沉淀] %s 被质量门槛或去重策略拦截，未落盘", role_id)
+            except Exception as exc:
+                logger.warning("[经验沉淀] %s 沉淀失败: %s", role_id, exc)
+
+        print(
+            f"[Orchestrator] 经验沉淀完成:\n"
+            f"  蒸馏 {total} 条 -> 打分通过 {passed} 条 -> 合并 {merged_count} 组 -> 最终沉淀 {settled} 条"
+        )
+
+    @staticmethod
+    def _calc_confidence(
+        pass_rate: float | None,
+        task_completed: bool,
+        no_rework: bool,
+        knowledge_cited: bool,
+    ) -> float:
+        score = 0.0
+        score += 0.4 * (pass_rate if pass_rate is not None else 0.5)
+        score += 0.3 * (1.0 if task_completed else 0.0)
+        score += 0.2 * (1.0 if no_rework else 0.0)
+        score += 0.1 * (1.0 if knowledge_cited else 0.0)
+        return round(score, 2)
+
+    async def _broadcast(self, title: str, content: str, color: str) -> None:
+        try:
+            print(f"[广播] {title}: {content[:100]}")
+        except UnicodeEncodeError:
+            fallback = f"[broadcast] {title.encode('ascii', 'ignore').decode('ascii')}: {content[:100].encode('ascii', 'ignore').decode('ascii')}"
+            print(fallback)
+        if not FEISHU_CHAT_ID:
+            return
+
+        try:
+            from feishu.im import FeishuIMClient
+
+            im = FeishuIMClient()
+            await im.send_card(FEISHU_CHAT_ID, title, content, color)
+        except Exception as exc:
+            logger.warning("广播发送失败: %s", exc)
