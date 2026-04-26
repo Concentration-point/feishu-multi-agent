@@ -4,6 +4,8 @@
 
 .claude/
 .pytest_cache/
+pytest-cache-files-*/
+pytest-tmp/
 .mypy_cache/
 .ruff_cache/
 .venv/
