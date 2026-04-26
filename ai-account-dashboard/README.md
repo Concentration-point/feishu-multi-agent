@@ -23,3 +23,9 @@
 - 不操作支付页
 
 数据保存在浏览器 localStorage。要长期保存，请定期导出备份。
+
+## 半自动额度更新
+
+方式 A：在 Windsurf 官方账号/用量页面 `Ctrl+A` → `Ctrl+C`，回到 Dashboard 编辑账号，把文本粘到「智能解析」框，点「智能解析并填入」。
+
+方式 B：打开 `bookmarklet.html`，把里面的「复制页面文本到剪贴板」拖到书签栏；以后在 Windsurf 页面点这个书签，再回 Dashboard 粘贴解析。

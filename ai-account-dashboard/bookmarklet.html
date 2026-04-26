@@ -1,0 +1,6 @@
+﻿<!doctype html><meta charset="utf-8"><title>AI Account Dashboard 书签脚本</title>
+<style>body{font-family:system-ui,"Microsoft YaHei";max-width:760px;margin:48px auto;line-height:1.7}code,a{background:#f1f5f9;padding:8px 10px;border-radius:8px}a{display:inline-block;color:#111;text-decoration:none;border:1px solid #cbd5e1}</style>
+<h1>一键复制当前页面文本</h1>
+<p>把下面这个链接拖到浏览器书签栏。以后打开 Windsurf 官方用量/账号页面后，点这个书签，它会复制当前页面文字；再回 Dashboard 粘贴到「智能解析」框。</p>
+<p><a href="javascript:(async()=>{try{await navigator.clipboard.writeText(document.body.innerText);alert('页面文本已复制，回 Dashboard 粘贴解析');}catch(e){prompt('复制失败，手动复制下面文本',document.body.innerText)}})()">复制页面文本到剪贴板</a></p>
+<p>说明：它只读取你当前正在看的页面文字，不读取 token，不发网络请求。</p>
