@@ -147,6 +147,17 @@ class SoulConfig:
     body: str  # Markdown 正文
 
 
+@dataclass
+class AgentResult:
+    """Result object for isolated single-agent unit execution."""
+    role_id: str
+    output: str
+    messages: list[dict]
+    tool_calls: list[dict]
+    missing_required_tools: list[str]
+    meta: dict[str, Any]
+
+
 def parse_soul(text: str) -> SoulConfig:
     """解析 soul.md：--- YAML frontmatter --- + Markdown body。"""
     parts = text.split("---", 2)
@@ -415,6 +426,11 @@ class BaseAgent:
         record_id: str,
         event_bus=None,
         task_filter: dict | None = None,
+        *,
+        tool_registry: ToolRegistry | None = None,
+        llm_client: Any | None = None,
+        shared_knowledge: str | None = None,
+        project_memory_factory: Any | None = None,
     ):
         self.role_id = role_id
         self.record_id = record_id
@@ -431,14 +447,19 @@ class BaseAgent:
         )
 
         # 加载共享知识（按角色分层装配）
-        self.shared_knowledge = load_shared_knowledge(role_id)
+        self.shared_knowledge = (
+            load_shared_knowledge(role_id)
+            if shared_knowledge is None
+            else shared_knowledge
+        )
 
         # 工具注册
-        self._registry = ToolRegistry()
+        self._registry = tool_registry or ToolRegistry()
         self._tools_config = self._registry.get_tools(self.soul.tools)
+        self._project_memory_factory = project_memory_factory or ProjectMemory
 
         # LLM 客户端
-        self._llm = AsyncOpenAI(
+        self._llm = llm_client or AsyncOpenAI(
             base_url=LLM_BASE_URL,
             api_key=LLM_API_KEY,
             timeout=LLM_TIMEOUT_SECONDS,
@@ -495,11 +516,136 @@ class BaseAgent:
         except Exception:
             pass
 
-    async def run(self) -> str:
+    def _build_unit_system_prompt(
+        self,
+        strategy: dict[str, Any],
+        context: dict[str, Any],
+    ) -> str:
+        """Build a prompt for isolated single-agent tests without pipeline state."""
+        sections: list[str] = []
+        if self.shared_knowledge:
+            sections.append("# Shared knowledge\n\n" + self.shared_knowledge)
+        sections.append(
+            f"# Role soul\n\n"
+            f"- name: {self.soul.name}\n"
+            f"- role_id: {self.soul.role_id}\n"
+            f"- description: {self.soul.description}\n\n"
+            f"{self.soul.body}"
+        )
+        if strategy:
+            sections.append(
+                "# Explicit strategy\n\n"
+                + json.dumps(strategy, ensure_ascii=False, indent=2)
+            )
+        if context:
+            sections.append(
+                "# Explicit context\n\n"
+                + json.dumps(context, ensure_ascii=False, indent=2, default=str)
+            )
+        return "\n\n---\n\n".join(sections)
+
+    @staticmethod
+    def _build_unit_user_prompt(input_data: str) -> str:
+        return "# Input\n\n" + (input_data or "")
+
+    async def run_unit(
+        self,
+        input_data: str,
+        strategy: dict | None = None,
+        context: dict | None = None,
+    ) -> AgentResult:
+        """Run one soul-driven agent with explicit input/context/strategy only.
+
+        This path is intended for unit tests. It does not load ProjectMemory,
+        does not enter the pipeline, and does not run reflection/wiki hooks.
+        """
+        strategy = strategy or {}
+        context = context or {}
+        tool_context = AgentContext(
+            record_id=str(context.get("record_id") or self.record_id),
+            project_name=str(
+                context.get("project_name")
+                or context.get("client_name")
+                or self.role_id
+            ),
+            role_id=self.role_id,
+        )
+        messages: list[dict] = [
+            {
+                "role": "system",
+                "content": self._build_unit_system_prompt(strategy, context),
+            },
+            {"role": "user", "content": self._build_unit_user_prompt(input_data)},
+        ]
+        tool_calls: list[dict] = []
+        final_output = ""
+
+        for iteration in range(1, self.soul.max_iterations + 1):
+            response = await self._llm_call(
+                messages,
+                stage="unit_react_loop",
+                iteration=iteration,
+            )
+            message = response.choices[0].message
+            messages.append(message.model_dump())
+
+            if not message.tool_calls:
+                final_output = message.content or ""
+                break
+
+            for tc in message.tool_calls:
+                fn_name = tc.function.name
+                try:
+                    fn_args = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    fn_args = {}
+                result = await self._registry.call_tool(fn_name, fn_args, tool_context)
+                tool_calls.append(
+                    {
+                        "tool_name": fn_name,
+                        "arguments": fn_args,
+                        "result": result,
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    }
+                )
+        else:
+            final_output = messages[-1].get("content", "") if messages else ""
+
+        missing = self._check_required_tools(messages)
+        self._messages = messages
+        return AgentResult(
+            role_id=self.role_id,
+            output=final_output,
+            messages=messages,
+            tool_calls=tool_calls,
+            missing_required_tools=missing,
+            meta={
+                "mode": "unit",
+                "soul_name": self.soul.name,
+                "record_id": tool_context.record_id,
+                "project_name": tool_context.project_name,
+            },
+        )
+
+    async def run(
+        self,
+        input_data: str | None = None,
+        strategy: dict | None = None,
+        context: dict | None = None,
+    ) -> str | AgentResult:
         """执行 Agent 的完整 ReAct 循环。"""
+        if input_data is not None or strategy is not None or context is not None:
+            return await self.run_unit(input_data or "", strategy, context)
+
         # 1. 加载项目上下文（独立 Agent 如数据分析师无对应记录时兜底）
         try:
-            pm = ProjectMemory(self.record_id)
+            pm = self._project_memory_factory(self.record_id)
             proj = await pm.load()
         except Exception:
             logger.info("[%s] 无对应项目记录，使用空上下文", self.soul.name)
