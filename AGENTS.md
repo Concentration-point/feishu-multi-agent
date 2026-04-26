@@ -166,6 +166,14 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 - 热榜原榜抓不到时，允许降级为“搜索恢复版”或“人话替代版”，但必须明确标注，不准伪装成原榜。
 - 对晨报热榜链，优先复用已验证过的历史有效入口：知乎优先官方热榜页，微博在官方链未证实稳定前可先走已验证的聚合页，再做官方补测。
 
+### Image generation workflow
+
+- 任何生图、修图、图卡、海报、证件照、UI mockup、系列视觉任务，优先遵循 `IMAGE-GENERATION-SOP.md`。
+- 学习外部生图 workflow / skill / 案例时，只吸收结构原则：意图翻译、任务拆解、prompt 编译、质量审查、案例复用；不得照搬未审计依赖或外部人设。
+- Feishu 会话里使用 `image_generate` 后，必须发可见短 caption，如“生成好了。”；不要用 `NO_REPLY` 造成附件丢失或用户以为死机。
+- 指定 GPT-Image-2 时优先使用完整模型名 `openai/gpt-image-2`，避免默认 provider 掉到不支持生图的 `custom-api`。
+- OpenAI 图像模型如果不支持 `aspectRatio`，改用 `size`；失败后直接换参数重试并说明，不准空消息。
+
 ### OCR / 表格识别 workflow
 
 - 任何图片识别任务，先判断版型：普通文字图 / 结构化表格图 / 关键决策图。
