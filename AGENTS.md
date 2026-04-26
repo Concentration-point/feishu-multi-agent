@@ -168,8 +168,10 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 
 ### Image generation workflow
 
-- 任何生图、修图、图卡、海报、证件照、UI mockup、系列视觉任务，优先遵循 `IMAGE-GENERATION-SOP.md`。
+- 任何生图、修图、图卡、海报、证件照、UI mockup、系列视觉任务，必须遵循 `IMAGE-GENERATION-SOP.md`；不是“知道有 SOP”，而是每次实际执行其闭环。
 - 学习外部生图 workflow / skill / 案例时，只吸收结构原则：意图翻译、任务拆解、prompt 编译、质量审查、案例复用；不得照搬未审计依赖或外部人设。
+- 高要求视觉任务默认执行 **Brief → Prompt → Generate → Critique → Regenerate if needed**。即使不把全过程长篇说给用户，也必须在内部完成 brief 与审查，不能只写长 prompt 就算执行。
+- 海报/图卡/UI 等带文字任务，默认优先生成“高级无字或少字主视觉 + 可后期叠加的准确文案”；除非用户明确要求图内文字，否则不要把大量中文交给生图模型硬排。
 - Feishu 会话里使用 `image_generate` 后，必须发可见短 caption，如“生成好了。”；不要用 `NO_REPLY` 造成附件丢失或用户以为死机。
 - 指定 GPT-Image-2 时优先使用完整模型名 `openai/gpt-image-2`，避免默认 provider 掉到不支持生图的 `custom-api`。
 - OpenAI 图像模型如果不支持 `aspectRatio`，改用 `size`；失败后直接换参数重试并说明，不准空消息。
