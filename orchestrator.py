@@ -6,7 +6,7 @@ import logging
 import time
 from dataclasses import dataclass
 
-from agents.base import BaseAgent, load_soul_snippet
+from agents.base import BaseAgent
 from config import (
     DELIVERY_DOC_ENABLED,
     EXPERIENCE_CONFIDENCE_THRESHOLD,
@@ -28,13 +28,9 @@ from config import (
     ROUTE_TERMINAL_STATUSES,
     STATUS_DONE,
     STATUS_PENDING_REVIEW,
-    NEGOTIATION_CHECKPOINTS,
-    NEGOTIATION_ENABLED,
-    NEGOTIATION_MAX_ROUNDS,
     ROLE_NAMES,
     WIKI_SPACE_ID,
 )
-from memory.negotiation import NegotiationManager, NegotiationMessage
 from dashboard.event_bus import EventBus
 from memory.experience import ExperienceManager
 from memory.project import BriefProject, ContentMemory, ProjectMemory
@@ -73,7 +69,6 @@ class Orchestrator:
         self._review_threshold = REVIEW_PASS_THRESHOLD_DEFAULT
         self._review_red_flag = ""
         self._max_route_steps = 15  # 防止路由死循环的安全上限
-        self._negotiation = NegotiationManager()
         self._pm = ProjectMemory(record_id)
 
     def _publish(self, event_type: str, payload: dict | None = None, *, agent_role: str = "", agent_name: str = "") -> None:
@@ -238,13 +233,6 @@ class Orchestrator:
                     color="red",
                 )
 
-            # ── 协商检查点：上游完成后触发与下游的协商对话 ──
-            if result.ok:
-                await self._run_negotiation_checkpoint(
-                    upstream_role=role_id,
-                    project_name=project_name,
-                )
-
             # ── 文案完成后兜底：扫 draft 为空的行，单次 LLM 补写 ──
             if role_id == "copywriter" and result.ok:
                 await self._ensure_copywriter_drafts(project_name)
@@ -302,260 +290,6 @@ class Orchestrator:
 
         await self._settle_experiences(pending_experiences, project_name, pass_rate)
         return self.stage_results
-
-    async def _run_negotiation_checkpoint(
-        self,
-        *,
-        upstream_role: str,
-        project_name: str,
-    ) -> None:
-        """在上游 Agent 完成后，触发与配置中对应下游角色的协商对话。
-
-        协商流程：
-        1. 查找 NEGOTIATION_CHECKPOINTS 中以 upstream_role 为上游的配对
-        2. 用 LLM 模拟下游角色审阅上游产出，生成协商发起消息
-        3. 用 LLM 模拟上游角色回应
-        4. 最多 NEGOTIATION_MAX_ROUNDS 轮
-        5. 全程广播到 EventBus + IM
-        """
-        if not NEGOTIATION_ENABLED:
-            return
-
-        # 查找当前上游角色对应的协商检查点
-        downstream_roles = [
-            dr for ur, dr in NEGOTIATION_CHECKPOINTS if ur == upstream_role
-        ]
-        if not downstream_roles:
-            return
-
-        for downstream_role in downstream_roles:
-            upstream_name = ROLE_NAMES.get(upstream_role, upstream_role)
-            downstream_name = ROLE_NAMES.get(downstream_role, downstream_role)
-
-            print(
-                f"[Orchestrator] 协商检查点: {upstream_name} → {downstream_name}"
-            )
-            self._publish("negotiation.started", {
-                "upstream_role": upstream_role,
-                "downstream_role": downstream_role,
-                "upstream_name": upstream_name,
-                "downstream_name": downstream_name,
-            }, agent_role=downstream_role, agent_name=downstream_name)
-
-            # 读取上游产出作为协商上下文
-            upstream_output = ""
-            for sr in reversed(self.stage_results):
-                if sr.role_id == upstream_role and sr.ok:
-                    upstream_output = sr.output[:500]
-                    break
-
-            for round_num in range(1, NEGOTIATION_MAX_ROUNDS + 1):
-                # 下游发起协商
-                initiator_content = await self._generate_negotiation_message(
-                    sender_role=downstream_role,
-                    receiver_role=upstream_role,
-                    project_name=project_name,
-                    upstream_output=upstream_output,
-                    round_num=round_num,
-                    history=self._negotiation.format_for_prompt(ROLE_NAMES),
-                )
-
-                if not initiator_content or initiator_content.startswith("__SKIP__"):
-                    print(
-                        f"[Orchestrator] {downstream_name} 对 {upstream_name} 的产出无异议，跳过协商"
-                    )
-                    self._publish("negotiation.skipped", {
-                        "reason": "no_concerns",
-                        "round": round_num,
-                    }, agent_role=downstream_role, agent_name=downstream_name)
-                    break
-
-                init_msg = NegotiationMessage(
-                    sender_role=downstream_role,
-                    receiver_role=upstream_role,
-                    msg_type="proposal" if round_num == 1 else "question",
-                    content=initiator_content,
-                    round_num=round_num,
-                )
-                rnd = self._negotiation.start_round(init_msg)
-
-                # 广播发起消息
-                await self._broadcast(
-                    title=f"💬 团队协商 [{downstream_name} → {upstream_name}]",
-                    content=(
-                        f"**{downstream_name}** 审阅 **{upstream_name}** 的产出后提出：\n\n"
-                        f"> {initiator_content[:300]}"
-                    ),
-                    color="purple",
-                )
-                self._publish("negotiation.message", {
-                    "sender": downstream_role,
-                    "receiver": upstream_role,
-                    "type": init_msg.msg_type,
-                    "content": initiator_content[:500],
-                    "round": round_num,
-                }, agent_role=downstream_role, agent_name=downstream_name)
-
-                # 上游回应
-                response_content = await self._generate_negotiation_response(
-                    sender_role=upstream_role,
-                    initiator_role=downstream_role,
-                    initiator_content=initiator_content,
-                    project_name=project_name,
-                    round_num=round_num,
-                )
-
-                resp_msg = NegotiationMessage(
-                    sender_role=upstream_role,
-                    receiver_role=downstream_role,
-                    msg_type="accept" if "接受" in response_content[:20] or "同意" in response_content[:20] else "concede",
-                    content=response_content,
-                    round_num=round_num,
-                )
-                self._negotiation.close_round(rnd, resp_msg)
-
-                # 广播回应
-                await self._broadcast(
-                    title=f"💬 {upstream_name} 回应",
-                    content=(
-                        f"**{upstream_name}** 回应 **{downstream_name}**：\n\n"
-                        f"> {response_content[:300]}"
-                    ),
-                    color="blue",
-                )
-                self._publish("negotiation.response", {
-                    "sender": upstream_role,
-                    "receiver": downstream_role,
-                    "type": resp_msg.msg_type,
-                    "content": response_content[:500],
-                    "round": round_num,
-                    "resolved": rnd.resolved,
-                }, agent_role=upstream_role, agent_name=upstream_name)
-
-                if rnd.resolved:
-                    print(
-                        f"[Orchestrator] 协商达成共识 (round {round_num})"
-                    )
-                    break
-
-            self._publish("negotiation.completed", {
-                "upstream_role": upstream_role,
-                "downstream_role": downstream_role,
-                "rounds": len(self._negotiation.rounds),
-                "messages": len(self._negotiation.messages),
-            }, agent_role=downstream_role, agent_name=downstream_name)
-
-    async def _generate_negotiation_message(
-        self,
-        *,
-        sender_role: str,
-        receiver_role: str,
-        project_name: str,
-        upstream_output: str,
-        round_num: int,
-        history: str,
-    ) -> str:
-        """生成下游角色审阅上游产出后的协商发起消息。
-
-        如果下游角色对上游产出无异议，返回 '__SKIP__'。
-        """
-        from openai import AsyncOpenAI
-
-        sender_name = ROLE_NAMES.get(sender_role, sender_role)
-        receiver_name = ROLE_NAMES.get(receiver_role, receiver_role)
-
-        soul_snippet = load_soul_snippet(sender_role)
-
-        system_prompt = (
-            f"你是内容营销团队的{sender_name}。{soul_snippet}\n\n"
-            f"你刚收到 {receiver_name} 的工作产出，需要从你的专业角度审阅。\n\n"
-            "审阅原则：\n"
-            "- 如果产出质量过关且符合项目需求，直接回复 '__SKIP__'（表示无异议）\n"
-            "- 如果有改进建议或疑问，用具体、建设性的方式提出\n"
-            "- 保持简洁，不超过 100 字\n"
-            "- 用第一人称，保持你的角色人格\n"
-            "- 不要泛泛而谈，要针对具体内容"
-        )
-
-        user_prompt = f"项目: {project_name}\n\n{receiver_name} 的产出摘要:\n{upstream_output}\n"
-        if history:
-            user_prompt += f"\n{history}\n"
-        user_prompt += f"\n请以{sender_name}身份审阅，有建议就提，没问题就回复 __SKIP__："
-
-        try:
-            client = AsyncOpenAI(
-                base_url=LLM_BASE_URL,
-                api_key=LLM_API_KEY,
-                timeout=LLM_TIMEOUT_SECONDS,
-            )
-            resp = await client.chat.completions.create(
-                model=LLM_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=200,
-                temperature=0.7,
-            )
-            return (resp.choices[0].message.content or "").strip()
-        except Exception as e:
-            logger.warning("协商消息生成失败: %s", e)
-            return "__SKIP__"
-
-    async def _generate_negotiation_response(
-        self,
-        *,
-        sender_role: str,
-        initiator_role: str,
-        initiator_content: str,
-        project_name: str,
-        round_num: int,
-    ) -> str:
-        """生成上游角色对下游协商消息的回应。"""
-        from openai import AsyncOpenAI
-
-        sender_name = ROLE_NAMES.get(sender_role, sender_role)
-        initiator_name = ROLE_NAMES.get(initiator_role, initiator_role)
-
-        soul_snippet = load_soul_snippet(sender_role)
-
-        system_prompt = (
-            f"你是内容营销团队的{sender_name}。{soul_snippet}\n\n"
-            f"{initiator_name} 对你的工作提出了建议，请基于你的专业立场回应。\n\n"
-            "回应原则：\n"
-            "- 如果对方说得有道理，明确接受并说明如何调整（以'接受'或'同意'开头）\n"
-            "- 如果你有不同看法，给出专业理由，但态度积极\n"
-            "- 保持简洁，不超过 120 字\n"
-            "- 用第一人称，保持你的角色人格\n"
-            "- 团队协作精神，不要对抗"
-        )
-
-        user_prompt = (
-            f"项目: {project_name}\n\n"
-            f"{initiator_name} 的建议（第 {round_num} 轮）：{initiator_content}\n\n"
-            f"请以{sender_name}身份回应："
-        )
-
-        try:
-            client = AsyncOpenAI(
-                base_url=LLM_BASE_URL,
-                api_key=LLM_API_KEY,
-                timeout=LLM_TIMEOUT_SECONDS,
-            )
-            resp = await client.chat.completions.create(
-                model=LLM_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                max_tokens=200,
-                temperature=0.7,
-            )
-            return (resp.choices[0].message.content or "").strip() or "收到，我会考虑调整。"
-        except Exception as e:
-            logger.warning("协商回应生成失败: %s", e)
-            return f"（{sender_name}暂时无法回应: {type(e).__name__}）"
-
 
     async def _run_stage_with_agent(
         self,

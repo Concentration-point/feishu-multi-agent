@@ -204,7 +204,7 @@ def parse_soul(text: str) -> SoulConfig:
 def load_soul_snippet(role_id: str, max_chars: int = 500) -> str:
     """加载角色 soul.md 核心描述片段（跳过 frontmatter，返回正文前 max_chars 字）。
 
-    轻量版本，供 Orchestrator 协商和 negotiate 工具注入人格上下文。
+    轻量版本，供外部模块注入角色人格上下文。
     """
     soul_path = _AGENTS_DIR / role_id / "soul.md"
     if not soul_path.exists():

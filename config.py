@@ -224,21 +224,6 @@ ROUTE_TABLE: dict[str, str | None] = {
 # 路由终止状态集合（命中即结束流水线主循环）
 ROUTE_TERMINAL_STATUSES: set[str] = {STATUS_DONE, STATUS_REJECTED}
 
-# ── Agent 协商机制 ──
-# 协商检查点：(上游角色, 下游角色) 对，在上游完成后自动触发下游对产出的审阅协商
-NEGOTIATION_CHECKPOINTS: list[tuple[str, str]] = [
-    ("account_manager", "strategist"),   # 策略师审阅 Brief 解读
-    ("strategist", "copywriter"),        # 文案审阅策略方案
-    ("reviewer", "copywriter"),          # 审核反馈给文案
-    ("reviewer", "project_manager"),     # 项目经理审阅审核结果
-]
-
-# 每个检查点最多协商轮数（防止无限对话）
-NEGOTIATION_MAX_ROUNDS: int = int(os.getenv("NEGOTIATION_MAX_ROUNDS", "2"))
-
-# 是否启用协商机制（可通过环境变量关闭）
-NEGOTIATION_ENABLED: bool = os.getenv("NEGOTIATION_ENABLED", "true").lower() in ("true", "1", "yes")
-
 # ── 角色名称映射（Agent role_id → 中文展示名）──
 ROLE_NAMES: dict[str, str] = {
     "account_manager": "客户经理",
