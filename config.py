@@ -49,6 +49,9 @@ WIKI_SPACE_ID: str = os.getenv("WIKI_SPACE_ID", "")
 WEBHOOK_PORT: int = int(os.getenv("WEBHOOK_PORT", "8000"))
 WEBHOOK_VERIFICATION_TOKEN: str = os.getenv("WEBHOOK_VERIFICATION_TOKEN", "")
 
+# ── 交付文档自动生成 ──
+DELIVERY_DOC_ENABLED: bool = os.getenv("DELIVERY_DOC_ENABLED", "true").lower() in ("true", "1", "yes")
+
 # ── 人类审核配置 ──
 AUTO_APPROVE_HUMAN_REVIEW: bool = os.getenv("AUTO_APPROVE_HUMAN_REVIEW", "false").lower() in ("true", "1", "yes")
 HUMAN_REVIEW_TIMEOUT: int = int(os.getenv("HUMAN_REVIEW_TIMEOUT", "300"))

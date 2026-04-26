@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from agents.base import BaseAgent, load_soul_snippet
 from config import (
+    DELIVERY_DOC_ENABLED,
     EXPERIENCE_CONFIDENCE_THRESHOLD,
     EXPERIENCE_MAX_PER_CATEGORY,
     FEISHU_CHAT_ID,
@@ -31,6 +32,7 @@ from config import (
     NEGOTIATION_ENABLED,
     NEGOTIATION_MAX_ROUNDS,
     ROLE_NAMES,
+    WIKI_SPACE_ID,
 )
 from memory.negotiation import NegotiationManager, NegotiationMessage
 from dashboard.event_bus import EventBus
@@ -287,6 +289,16 @@ class Orchestrator:
             "status": current_status or STATUS_DONE,
             "route_steps": step,
         })
+
+        # ── 生成飞书交付云文档 ──
+        if DELIVERY_DOC_ENABLED and WIKI_SPACE_ID and current_status in (STATUS_DONE, None):
+            try:
+                doc_url = await self._generate_delivery_document(project_name)
+                if doc_url:
+                    self._publish("delivery_doc.created", {"url": doc_url, "project_name": project_name})
+            except Exception as exc:
+                logger.warning("交付文档生成失败（不影响主流程）: %s", exc)
+                print(f"[Orchestrator] 警告: 交付文档生成失败: {type(exc).__name__}: {exc}")
 
         await self._settle_experiences(pending_experiences, project_name, pass_rate)
         return self.stage_results
@@ -1163,6 +1175,187 @@ class Orchestrator:
             return proj.client_name or "未知客户"
         except Exception:
             return "未知客户"
+
+    async def _generate_delivery_document(self, project_name: str) -> str | None:
+        """流水线完成后，在飞书知识空间自动生成面向客户的交付云文档。
+
+        返回文档 URL（成功时）或 None。
+        文档内容面向客户，不包含内部审核数据。
+        """
+        from datetime import datetime
+        from feishu.wiki import FeishuWikiClient
+
+        wiki = FeishuWikiClient()
+        proj = await self._pm.load()
+        cm = ContentMemory()
+        rows = await cm.list_by_project(project_name)
+
+        # 统计数据
+        from feishu.delivery_charts import compute_delivery_stats
+        stats = compute_delivery_stats(rows)
+        today = datetime.now().strftime("%Y-%m-%d")
+        doc_title = f"{project_name}-交付报告-{today}"
+
+        # 创建知识空间节点
+        parent_title = "项目交付文档"
+        from sync.wiki_sync import WikiSyncService
+        sync_svc = WikiSyncService(WIKI_SPACE_ID)
+        parent_node = await sync_svc._ensure_parent_node(parent_title)
+        parent_token = parent_node["node_token"]
+
+        existing = await wiki.find_node_by_title(WIKI_SPACE_ID, doc_title, parent_token)
+        if existing:
+            obj_token = existing.get("obj_token", "")
+        else:
+            node = await wiki.create_node(WIKI_SPACE_ID, parent_token, doc_title)
+            obj_token = node.get("obj_token", "")
+
+        if not obj_token:
+            logger.warning("交付文档：无法获取 document_id")
+            return None
+
+        # 构建文档结构化块（面向客户）
+        blocks: list[dict] = []
+
+        # ── 交付概览（Callout 蓝色高亮块）──
+        platforms_str = "、".join(stats["platform_counts"].keys()) if stats["platform_counts"] else "未指定"
+        date_range = ""
+        if stats["first_date"] and stats["last_date"]:
+            date_range = f"{stats['first_date']} — {stats['last_date']}"
+        elif stats["first_date"]:
+            date_range = stats["first_date"]
+
+        overview_lines = [
+            f"📝 交付内容: {stats['total']} 篇",
+            f"📡 覆盖平台: {platforms_str}",
+        ]
+        if date_range:
+            overview_lines.append(f"📅 排期周期: {date_range}")
+        if stats["pending"] > 0:
+            overview_lines.append(f"⏳ 待确认: {stats['pending']} 篇")
+        overview_lines.append(f"📆 交付日期: {today}")
+        if proj.project_type:
+            overview_lines.insert(0, f"📋 项目类型: {proj.project_type}")
+
+        blocks.append({"type": "callout", "text": "\n".join(overview_lines), "emoji": "chart_with_upwards_trend", "bg_color": 5})
+        blocks.append({"type": "divider"})
+
+        # ── 需求理解 ──
+        if proj.brief_analysis:
+            blocks.append({"type": "heading2", "text": "需求理解"})
+            for para in proj.brief_analysis.split("\n"):
+                para = para.strip()
+                if para:
+                    blocks.append({"type": "text", "text": para})
+            blocks.append({"type": "divider"})
+
+        # ── 策略思路 ──
+        if proj.strategy:
+            blocks.append({"type": "heading2", "text": "策略思路"})
+            for para in proj.strategy.split("\n"):
+                para = para.strip()
+                if para:
+                    blocks.append({"type": "text", "text": para})
+            blocks.append({"type": "divider"})
+
+        # ── 内容清单表格 ──
+        if rows:
+            blocks.append({"type": "heading2", "text": "📋 内容清单"})
+            table_header = ["#", "标题", "平台", "类型", "计划发布", "字数"]
+            table_rows = [table_header]
+            for idx, row in enumerate(rows, 1):
+                table_rows.append([
+                    str(idx),
+                    (row.title or "未命名")[:20],
+                    row.platform or "—",
+                    row.content_type or "—",
+                    row.publish_date or "待确认",
+                    str(row.word_count) if row.word_count else "—",
+                ])
+            blocks.append({"type": "table", "rows": table_rows})
+
+        # ── 各内容正文 ──
+        for idx, row in enumerate(rows, 1):
+            if row.draft:
+                blocks.append({"type": "heading3", "text": f"{idx}. {row.title or '未命名'}"})
+                for para in row.draft.split("\n"):
+                    para = para.strip()
+                    if para:
+                        blocks.append({"type": "text", "text": para})
+
+        if rows:
+            blocks.append({"type": "divider"})
+
+        # ── 投放概览（表格 + 图表）──
+        if stats["platform_counts"]:
+            blocks.append({"type": "heading2", "text": "📈 投放概览"})
+
+            # 平台分布表
+            pt_header = ["平台", "内容数", "内容类型", "字数区间"]
+            pt_rows = [pt_header]
+            for plat, cnt in stats["platform_counts"].items():
+                plat_rows_data = [r for r in rows if (r.platform or "未指定") == plat]
+                wc_list = [r.word_count for r in plat_rows_data if r.word_count > 0]
+                wc_range = f"{min(wc_list)}~{max(wc_list)}" if wc_list else "—"
+                pt_rows.append([
+                    plat,
+                    str(cnt),
+                    stats["platform_types"].get(plat, "—"),
+                    wc_range,
+                ])
+            blocks.append({"type": "table", "rows": pt_rows})
+
+            # 图表（matplotlib，失败不影响主流程）
+            try:
+                from feishu.delivery_charts import generate_platform_bar_chart, generate_status_pie_chart
+
+                bar_png = generate_platform_bar_chart(stats["platform_counts"])
+                if bar_png:
+                    blocks.append({"type": "image", "data": bar_png, "name": "platform_bar.png"})
+
+                if stats["total"] > 0:
+                    pie_png = generate_status_pie_chart(stats["scheduled"], stats["pending"])
+                    if pie_png:
+                        blocks.append({"type": "image", "data": pie_png, "name": "status_pie.png"})
+            except ImportError:
+                logger.info("matplotlib 未安装，跳过图表生成")
+            except Exception as chart_exc:
+                logger.warning("图表生成失败（不影响文档）: %s", chart_exc)
+
+            blocks.append({"type": "divider"})
+
+        # ── 待确认项（黄色 Callout）──
+        pending_rows = [r for r in rows if not r.publish_date]
+        if pending_rows:
+            pending_text = "以下内容待贵方确认后安排发布：\n" + "\n".join(
+                f"· 《{r.title or '未命名'}》— {r.platform or '未指定'}" for r in pending_rows
+            )
+            blocks.append({"type": "callout", "text": pending_text, "emoji": "warning", "bg_color": 3})
+            blocks.append({"type": "divider"})
+
+        # ── 交付摘要 ──
+        if proj.delivery:
+            blocks.append({"type": "heading2", "text": "交付总结"})
+            for para in proj.delivery.split("\n"):
+                para = para.strip()
+                if para:
+                    blocks.append({"type": "text", "text": para})
+            blocks.append({"type": "divider"})
+
+        # ── 署名 ──
+        blocks.append({"type": "text", "text": f"智策传媒 · {today} 自动生成"})
+
+        # 写入文档
+        await wiki.write_delivery_doc(obj_token, blocks)
+        doc_url = f"https://feishu.cn/docx/{obj_token}"
+
+        print(f"[Orchestrator] 交付文档已生成: {doc_title} → {doc_url}")
+        await self._broadcast(
+            title="📄 交付文档已生成",
+            content=f"客户 **{project_name}** 的交付报告已自动生成\n📎 {doc_url}",
+            color="green",
+        )
+        return doc_url
 
     async def _settle_experiences(
         self,
