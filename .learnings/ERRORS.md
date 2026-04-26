@@ -3,3 +3,90 @@
 记录命令失败、外部工具异常、环境问题。
 
 ---
+
+## [ERR-20260425-001] git-commit-missing-user-identity
+
+**Logged**: 2026-04-25T16:15:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: config
+
+### Summary
+New isolated OpenClaw agent workspaces may initialize as Git repos without local user.name/user.email, causing the first commit to fail.
+
+### Error
+```text
+Author identity unknown
+fatal: unable to auto-detect email address
+```
+
+### Context
+- Operation: committing initial files for `workspace-feishu-project`
+- Fix applied: set local repo identity only:
+  - `git config user.name "Clawd"`
+  - `git config user.email "clawd@local.openclaw"`
+
+### Suggested Fix
+For future new agent workspaces, set local Git identity before the first commit instead of changing global Git identity.
+
+### Metadata
+- Reproducible: yes
+- Related Files: C:\Users\25723\.openclaw\workspace-feishu-project\.git\config
+---
+
+## [ERR-20260426-001] openclaw_config_edit_probe_script
+
+**Logged**: 2026-04-26T18:12:00+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: config
+
+### Summary
+While diagnosing OpenClaw API image generation, the first Node probe script parsed its own script path instead of the config path because it used `process.argv[1]` instead of `process.argv[2]`.
+
+### Error
+```text
+SyntaxError: Unexpected token 'const'
+```
+
+### Context
+- Command attempted: temporary Node script to parse `~/.openclaw/openclaw.json` and probe `/v1/images/generations`.
+- Cause: in Node, `process.argv[1]` is the script file; the first user argument is `process.argv[2]`.
+
+### Suggested Fix
+For temporary Node scripts launched as `node script.js arg`, always read the first external argument from `process.argv[2]`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: C:\Users\25723\.openclaw\openclaw.json
+
+---
+
+## [ERR-20260426-002] openclaw_image_config_provider_models
+
+**Logged**: 2026-04-26T18:12:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: config
+
+### Summary
+Adding `models.providers.openai` without a `models` array made OpenClaw config invalid; then using `api: openai-chat` was also invalid for this OpenClaw schema.
+
+### Error
+```text
+models.providers.openai.models: Invalid input: expected array, received undefined
+models.providers.openai.models.0.api: Invalid option: expected one of "openai-completions"|"openai-responses"|...
+```
+
+### Context
+- Goal: route image generation to the local OpenAI-compatible `/v1/images/generations` endpoint.
+- Fix applied: add `models.providers.openai.models` with `api: 'openai-responses'`, then set `agents.defaults.imageGenerationModel.primary = 'openai/gpt-image-2'`.
+
+### Suggested Fix
+When adding an OpenClaw model provider manually, include a valid `models` array and use schema-supported `api` values only.
+
+### Metadata
+- Reproducible: yes
+- Related Files: C:\Users\25723\.openclaw\openclaw.json
+
+---
