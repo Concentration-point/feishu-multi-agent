@@ -269,13 +269,45 @@ class Orchestrator:
             color="green",
         )
 
-        self._publish("pipeline.completed", {
+        # ── 5 判据校验：决定发 pipeline.completed 还是 pipeline.aborted ──
+        # 判据 1: 流水线已 finalize（执行到此处即满足）
+        # 判据 2: route_steps ≥ 1
+        # 判据 3: ok_count ≥ 1
+        # 判据 4: 最终 status == "已完成"
+        # 判据 5: pass_rate is not None and ≥ 阈值（覆盖"reviewer pass=true"）
+        final_status = current_status or STATUS_DONE
+        is_truly_completed = (
+            step >= 1
+            and ok_count >= 1
+            and final_status == STATUS_DONE
+            and pass_rate is not None
+            and pass_rate >= self._review_threshold
+        )
+
+        abort_reason: str | None = None
+        if not is_truly_completed:
+            if step == 0:
+                abort_reason = "route_zero_steps"
+            elif ok_count == 0:
+                abort_reason = "no_ok_stage"
+            elif final_status != STATUS_DONE:
+                abort_reason = f"status_not_done:{final_status}"
+            elif pass_rate is None:
+                abort_reason = "no_pass_rate"
+            elif pass_rate < self._review_threshold:
+                abort_reason = f"below_threshold:{pass_rate:.2f}<{self._review_threshold:.2f}"
+
+        verdict_event = "pipeline.completed" if is_truly_completed else "pipeline.aborted"
+        self._publish(verdict_event, {
             "total_time": total_time,
             "ok_count": ok_count,
             "total_stages": len(self.stage_results),
             "pass_rate": pass_rate,
-            "status": current_status or STATUS_DONE,
+            "status": final_status,
             "route_steps": step,
+            "verdict": "completed" if is_truly_completed else "aborted",
+            "abort_reason": abort_reason,
+            "review_threshold": self._review_threshold,
         })
 
         # ── 生成飞书交付云文档 ──
