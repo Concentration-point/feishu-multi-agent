@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import os
 
+# 进程级 asyncio 运行时修复（Windows: ProactorEventLoop -> SelectorEventLoop）。
+# 必须在任何 asyncio.run() 之前发生；放在 config.py 顶部是因为所有入口都 import config。
+import _runtime  # noqa: F401 — side-effect only
+
 from dotenv import load_dotenv
 
 load_dotenv()

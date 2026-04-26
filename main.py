@@ -655,14 +655,21 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
+    def _run(coro) -> int:
+        try:
+            return asyncio.run(coro)
+        except KeyboardInterrupt:
+            logger.warning("用户中断 (KeyboardInterrupt)，退出")
+            return 130
+
     if args.command == "run":
-        return asyncio.run(run_pipeline(args.record_id))
+        return _run(run_pipeline(args.record_id))
     if args.command == "sync":
         direction = getattr(args, "direction", "up")
-        return asyncio.run(run_sync(direction))
+        return _run(run_sync(direction))
     if args.command == "report":
         report_type = getattr(args, "report_type", "weekly")
-        return asyncio.run(run_report(report_type))
+        return _run(run_report(report_type))
     if args.command == "serve":
         import uvicorn
 
