@@ -90,3 +90,32 @@ When adding an OpenClaw model provider manually, include a valid `models` array 
 - Related Files: C:\Users\25723\.openclaw\openclaw.json
 
 ---
+
+## [ERR-20260426-003] openclaw_image_provider_aspectratio_cached_module
+
+**Logged**: 2026-04-26T18:36:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: config
+
+### Summary
+After patching OpenClaw's OpenAI image-generation provider chunk to support `aspectRatio`, the current agent session's `image_generate` tool still returned the old error because the provider module was already cached in the running tool process.
+
+### Error
+```text
+openai generate does not support aspectRatio overrides.
+```
+
+### Context
+- Patched file: `C:\Users\25723\AppData\Roaming\npm\node_modules\openclaw\dist\image-generation-provider-fiOkT1Zi.js`
+- Added aspect-ratio-to-size mapping for OpenAI-compatible image generation.
+- External fresh Node import verified `supportsAspectRatio: true` and successfully generated an image with `aspectRatio: '16:9'`.
+
+### Suggested Fix
+After patching runtime chunks, restart Gateway and validate from a fresh process/import. Do not trust the current already-loaded tool module as the final verdict.
+
+### Metadata
+- Reproducible: yes
+- Related Files: C:\Users\25723\AppData\Roaming\npm\node_modules\openclaw\dist\image-generation-provider-fiOkT1Zi.js
+
+---
