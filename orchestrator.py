@@ -6,12 +6,11 @@ import logging
 import time
 from dataclasses import dataclass
 
-from agents.base import BaseAgent
+from agents.base import BaseAgent, load_soul_snippet
 from config import (
     EXPERIENCE_CONFIDENCE_THRESHOLD,
     EXPERIENCE_MAX_PER_CATEGORY,
     FEISHU_CHAT_ID,
-    FIELD_MAP_PROJECT as FP,
     HUMAN_REVIEW_TIMEOUT,
     LLM_API_KEY,
     LLM_BASE_URL,
@@ -19,7 +18,6 @@ from config import (
     LLM_TIMEOUT_SECONDS,
     REVIEW_MAX_RETRIES,
     REVIEW_PASS_THRESHOLD_DEFAULT,
-    REVIEW_RED_FLAG_KEYWORDS,
     REVIEW_STATUS_APPROVED,
     REVIEW_STATUS_NEED_REVISE,
     REVIEW_STATUS_PENDING,
@@ -32,6 +30,7 @@ from config import (
     NEGOTIATION_CHECKPOINTS,
     NEGOTIATION_ENABLED,
     NEGOTIATION_MAX_ROUNDS,
+    ROLE_NAMES,
 )
 from memory.negotiation import NegotiationManager, NegotiationMessage
 from dashboard.event_bus import EventBus
@@ -41,14 +40,6 @@ from memory.project import BriefProject, ContentMemory, ProjectMemory
 
 logger = logging.getLogger(__name__)
 
-_ROLE_NAMES = {
-    "account_manager": "客户经理",
-    "strategist": "策略师",
-    "copywriter": "文案",
-    "reviewer": "审核",
-    "project_manager": "项目经理",
-    "data_analyst": "数据分析师",
-}
 
 
 @dataclass
@@ -58,11 +49,6 @@ class StageResult:
     duration_sec: float
     output: str = ""
     error: str = ""
-
-
-def _contains_red_flag(text: str) -> bool:
-    normalized = (text or "").strip()
-    return any(keyword in normalized for keyword in REVIEW_RED_FLAG_KEYWORDS)
 
 
 class Orchestrator:
@@ -86,6 +72,7 @@ class Orchestrator:
         self._review_red_flag = ""
         self._max_route_steps = 15  # 防止路由死循环的安全上限
         self._negotiation = NegotiationManager()
+        self._pm = ProjectMemory(record_id)
 
     def _publish(self, event_type: str, payload: dict | None = None, *, agent_role: str = "", agent_name: str = "") -> None:
         if self._event_bus is None:
@@ -102,7 +89,7 @@ class Orchestrator:
     async def _read_current_status(self) -> str:
         """从 Bitable 读取项目当前状态，异常时返回空字符串。"""
         try:
-            proj = await ProjectMemory(self.record_id).load()
+            proj = await self._pm.load()
             return (proj.status or "").strip()
         except Exception as exc:
             logger.warning("动态路由：读取项目状态失败: %s", exc)
@@ -120,9 +107,8 @@ class Orchestrator:
         pending_experiences: list[dict] = []
         self._review_threshold = await self._get_review_threshold()
 
-        pm = ProjectMemory(self.record_id)
         try:
-            proj = await pm.load()
+            proj = await self._pm.load()
         except Exception as exc:
             logger.exception("加载项目失败")
             print(f"[Orchestrator] 警告: 加载项目失败: {type(exc).__name__}: {exc}")
@@ -136,7 +122,7 @@ class Orchestrator:
             "project_name": project_name,
             "brief": brief_summary,
             "stages": list(self.pipeline),
-            "stage_names": {k: v for k, v in _ROLE_NAMES.items()},
+            "stage_names": {k: v for k, v in ROLE_NAMES.items()},
             "routing": "dynamic",
             "initial_status": current_status,
         })
@@ -194,7 +180,7 @@ class Orchestrator:
 
             step += 1
             role_id = next_role
-            role_name = _ROLE_NAMES.get(role_id, role_id)
+            role_name = ROLE_NAMES.get(role_id, role_id)
 
             prev_duration = self.stage_results[-1].duration_sec if self.stage_results else 0
             self._publish("pipeline.stage_changed", {
@@ -263,11 +249,7 @@ class Orchestrator:
 
             # ── 审核完成后处理返工逻辑 ──
             if role_id == "reviewer":
-                await self._handle_reviewer_retries(
-                    index=step,
-                    total=len(self.pipeline),
-                    pending_experiences=pending_experiences,
-                )
+                await self._handle_reviewer_retries()
 
             # ── 路由决策：读取最新状态，进入下一轮 ──
             current_status = await self._read_current_status()
@@ -335,8 +317,8 @@ class Orchestrator:
             return
 
         for downstream_role in downstream_roles:
-            upstream_name = _ROLE_NAMES.get(upstream_role, upstream_role)
-            downstream_name = _ROLE_NAMES.get(downstream_role, downstream_role)
+            upstream_name = ROLE_NAMES.get(upstream_role, upstream_role)
+            downstream_name = ROLE_NAMES.get(downstream_role, downstream_role)
 
             print(
                 f"[Orchestrator] 协商检查点: {upstream_name} → {downstream_name}"
@@ -363,7 +345,7 @@ class Orchestrator:
                     project_name=project_name,
                     upstream_output=upstream_output,
                     round_num=round_num,
-                    history=self._negotiation.format_for_prompt(_ROLE_NAMES),
+                    history=self._negotiation.format_for_prompt(ROLE_NAMES),
                 )
 
                 if not initiator_content or initiator_content.startswith("__SKIP__"):
@@ -467,10 +449,10 @@ class Orchestrator:
         """
         from openai import AsyncOpenAI
 
-        sender_name = _ROLE_NAMES.get(sender_role, sender_role)
-        receiver_name = _ROLE_NAMES.get(receiver_role, receiver_role)
+        sender_name = ROLE_NAMES.get(sender_role, sender_role)
+        receiver_name = ROLE_NAMES.get(receiver_role, receiver_role)
 
-        soul_snippet = self._load_soul_snippet(sender_role)
+        soul_snippet = load_soul_snippet(sender_role)
 
         system_prompt = (
             f"你是内容营销团队的{sender_name}。{soul_snippet}\n\n"
@@ -520,10 +502,10 @@ class Orchestrator:
         """生成上游角色对下游协商消息的回应。"""
         from openai import AsyncOpenAI
 
-        sender_name = _ROLE_NAMES.get(sender_role, sender_role)
-        initiator_name = _ROLE_NAMES.get(initiator_role, initiator_role)
+        sender_name = ROLE_NAMES.get(sender_role, sender_role)
+        initiator_name = ROLE_NAMES.get(initiator_role, initiator_role)
 
-        soul_snippet = self._load_soul_snippet(sender_role)
+        soul_snippet = load_soul_snippet(sender_role)
 
         system_prompt = (
             f"你是内容营销团队的{sender_name}。{soul_snippet}\n\n"
@@ -562,22 +544,6 @@ class Orchestrator:
             logger.warning("协商回应生成失败: %s", e)
             return f"（{sender_name}暂时无法回应: {type(e).__name__}）"
 
-    @staticmethod
-    def _load_soul_snippet(role_id: str) -> str:
-        """加载角色 soul.md 核心描述片段（前 500 字正文）。"""
-        from pathlib import Path
-        soul_path = Path(__file__).resolve().parent / "agents" / role_id / "soul.md"
-        if not soul_path.exists():
-            return ""
-        try:
-            text = soul_path.read_text(encoding="utf-8")
-            if text.startswith("---"):
-                parts = text.split("---", 2)
-                if len(parts) >= 3:
-                    text = parts[2]
-            return text.strip()[:500]
-        except Exception:
-            return ""
 
     async def _run_stage_with_agent(
         self,
@@ -626,7 +592,7 @@ class Orchestrator:
 
         # 1. 拉 rows 并按 platform 分组
         try:
-            proj = await ProjectMemory(self.record_id).load()
+            proj = await self._pm.load()
             rows = await ContentMemory().list_by_project(proj.client_name)
         except Exception as exc:
             duration = time.perf_counter() - start
@@ -768,95 +734,70 @@ class Orchestrator:
             error=stage_error,
         ), pending_experiences
 
-    async def _handle_reviewer_retries(
-        self,
-        *,
-        index: int,
-        total: int,
-        pending_experiences: list[dict],
-    ) -> None:
-        for attempt in range(1, REVIEW_MAX_RETRIES + 1):
-            pass_rate = await self._get_review_pass_rate()
-            pass_rate = await self._reconcile_review_pass_rate(pass_rate)
-            if pass_rate is None:
-                print("[Orchestrator] 警告: 无法读取审核通过率，跳过返工重试逻辑")
-                return
-            review_red_flag = await self._get_review_red_flag()
-            has_red_flag = bool(review_red_flag and review_red_flag.strip() and review_red_flag.strip() != "无")
-            self._review_red_flag = review_red_flag.strip() if review_red_flag and review_red_flag.strip() else "无"
-            if has_red_flag:
-                print(f"[Orchestrator] 警告: 审核结构化红线字段命中风险：{self._review_red_flag}，触发一票否决")
-            if pass_rate >= self._review_threshold and not has_red_flag:
-                print(f"[Orchestrator] 审核通过率 {pass_rate:.0%}，达到阈值 {self._review_threshold:.0%}，且无红线风险，继续进入下一阶段")
-                return
+    async def _handle_reviewer_retries(self) -> None:
+        """审核后评估：检查通过率和红线，不达标则回退状态为"撰写中"让主循环路由接管。
 
-            self.reviewer_retries += 1
-            self._publish("pipeline.rejection", {
-                "pass_rate": pass_rate,
-                "attempt": attempt,
-                "max_attempts": 2,
-            }, agent_role="reviewer", agent_name="审核")
+        不再内部执行 agent，重试流程由主循环动态路由自然驱动：
+        撰写中 → copywriter → 审核中 → reviewer → _handle_reviewer_retries → ...
+        """
+        pass_rate = await self._get_review_pass_rate()
+        pass_rate = await self._reconcile_review_pass_rate(pass_rate)
+        if pass_rate is None:
+            print("[Orchestrator] 警告: 无法读取审核通过率，跳过返工重试逻辑")
+            return
 
+        review_red_flag = await self._get_review_red_flag()
+        has_red_flag = bool(review_red_flag and review_red_flag.strip() and review_red_flag.strip() != "无")
+        self._review_red_flag = review_red_flag.strip() if review_red_flag and review_red_flag.strip() else "无"
+
+        if has_red_flag:
+            print(f"[Orchestrator] 警告: 审核结构化红线字段命中风险：{self._review_red_flag}，触发一票否决")
+
+        if pass_rate >= self._review_threshold and not has_red_flag:
+            print(f"[Orchestrator] 审核通过率 {pass_rate:.0%}，达到阈值 {self._review_threshold:.0%}，且无红线风险，继续进入下一阶段")
+            return
+
+        # 已达最大重试次数，强制推进到排期阶段，避免死循环
+        if self.reviewer_retries >= REVIEW_MAX_RETRIES:
             print(
-                f"[Orchestrator] 警告: 审核通过率 {pass_rate:.0%} < {self._review_threshold:.0%} 或存在红线风险，"
-                f"触发返工重试 {attempt}/{REVIEW_MAX_RETRIES}，状态改回 '撰写中'"
+                f"[Orchestrator] 警告: 审核通过率 {pass_rate:.0%}，阈值 {self._review_threshold:.0%}，"
+                f"重试已达上限 {REVIEW_MAX_RETRIES}，强制推进到排期阶段"
             )
-
-            review_status = await self._get_project_review_status()
-            await self._broadcast(
-                title="审核驳回，触发返工",
-                content=(
-                    f"通过率 **{pass_rate:.0%}**，阈值 **{self._review_threshold:.0%}**\n"
-                    f"红线风险：**{self._review_red_flag or '无'}**\n"
-                    f"人审状态：**{review_status or '未知'}**\n"
-                    f"文案将根据审核反馈修改，第 {attempt}/{REVIEW_MAX_RETRIES} 次重试"
-                ),
-                color="orange",
-            )
-
             try:
-                pm = ProjectMemory(self.record_id)
-                await pm.update_status("撰写中")
+                await self._pm.update_status("排期中")
             except Exception as exc:
-                print(f"[Orchestrator] 警告: 状态回退失败: {type(exc).__name__}: {exc}")
+                print(f"[Orchestrator] 警告: 强制推进状态失败: {type(exc).__name__}: {exc}")
+            return
 
-            # 返工重试复用 fan-out — 失败平台隔离，不波及其他平台
-            cw_result, cw_fanout_experiences = await self._run_copywriter_fanout(
-                index=index - 1,
-                total=total,
-            )
-            self.stage_results.append(cw_result)
-            pending_experiences.extend(cw_fanout_experiences)
+        # 触发返工：回退状态为"撰写中"，由主循环路由自然驱动 copywriter → reviewer
+        self.reviewer_retries += 1
+        self._publish("pipeline.rejection", {
+            "pass_rate": pass_rate,
+            "attempt": self.reviewer_retries,
+            "max_attempts": REVIEW_MAX_RETRIES,
+        }, agent_role="reviewer", agent_name="审核")
 
-            rv_result, rv_agent = await self._run_stage_with_agent(
-                "reviewer",
-                index=index,
-                total=total,
-            )
-            self.stage_results.append(rv_result)
-            if rv_agent and rv_agent._pending_experience:
-                pending_experiences.append(
-                    {
-                        "role_id": "reviewer",
-                        "card": rv_agent._pending_experience,
-                        "agent": rv_agent,
-                    }
-                )
+        print(
+            f"[Orchestrator] 警告: 审核通过率 {pass_rate:.0%} < {self._review_threshold:.0%} 或存在红线风险，"
+            f"触发返工重试 {self.reviewer_retries}/{REVIEW_MAX_RETRIES}，状态改回 '撰写中'"
+        )
 
-        final_rate = await self._get_review_pass_rate()
-        final_rate = await self._reconcile_review_pass_rate(final_rate)
-        final_red_flag = await self._get_review_red_flag()
-        has_final_red_flag = bool(final_red_flag and final_red_flag.strip() and final_red_flag.strip() != "无")
-        self._review_red_flag = final_red_flag.strip() if final_red_flag and final_red_flag.strip() else "无"
-        if final_rate is None:
-            print("[Orchestrator] 警告: 重试后仍无法读取审核通过率，继续往下走")
-        elif final_rate < self._review_threshold or has_final_red_flag:
-            print(
-                f"[Orchestrator] 警告: 审核通过率 {final_rate:.0%}，阈值 {self._review_threshold:.0%}，"
-                "重试后仍未达标或仍存在红线风险，继续进入 project_manager，不再卡死流程"
-            )
-        else:
-            print(f"[Orchestrator] 审核通过率在重试后提升至 {final_rate:.0%}，达到阈值 {self._review_threshold:.0%}，继续进入下一阶段")
+        review_status = await self._get_project_review_status()
+        await self._broadcast(
+            title="审核驳回，触发返工",
+            content=(
+                f"通过率 **{pass_rate:.0%}**，阈值 **{self._review_threshold:.0%}**\n"
+                f"红线风险：**{self._review_red_flag or '无'}**\n"
+                f"人审状态：**{review_status or '未知'}**\n"
+                f"文案将根据审核反馈修改，第 {self.reviewer_retries}/{REVIEW_MAX_RETRIES} 次重试"
+            ),
+            color="orange",
+        )
+
+        try:
+            await self._pm.update_status("撰写中")
+        except Exception as exc:
+            print(f"[Orchestrator] 警告: 状态回退失败: {type(exc).__name__}: {exc}")
 
     async def _enter_human_review_gate(self, *, resumed: bool) -> str:
         """AM 之后的人审门禁，或从"待人审"恢复。
@@ -869,9 +810,8 @@ class Orchestrator:
         """
         from tools.request_human_review import poll_for_human_reply
 
-        pm = ProjectMemory(self.record_id)
         try:
-            proj = await pm.load()
+            proj = await self._pm.load()
         except Exception as exc:
             logger.exception("门禁加载项目失败")
             print(f"[Orchestrator] 警告: 门禁加载项目失败: {exc}")
@@ -882,7 +822,7 @@ class Orchestrator:
             print("[Orchestrator] 警告: brief_analysis 为空，跳过人审门禁")
             return "skipped"
 
-        await pm.write_review_status(REVIEW_STATUS_PENDING)
+        await self._pm.write_review_status(REVIEW_STATUS_PENDING)
         self._publish("human_review.started", {"resumed": resumed})
 
         previous_msg_id: str | None = None
@@ -910,13 +850,13 @@ class Orchestrator:
             "send_count": prev_send_count + 1,
             "sent_at": sent_at,
         }
-        await pm.write_pending_meta(meta_to_save)
+        await self._pm.write_pending_meta(meta_to_save)
 
         if status in ("approved", "skipped_auto_approve", "skipped_no_chat", "send_failed"):
-            await pm.write_review_status(REVIEW_STATUS_APPROVED)
-            await pm.clear_pending_state()
+            await self._pm.write_review_status(REVIEW_STATUS_APPROVED)
+            await self._pm.clear_pending_state()
             try:
-                await pm.update_status("策略中")
+                await self._pm.update_status("策略中")
             except Exception as exc:
                 print(f"[Orchestrator] 警告: 放行后更新状态失败: {exc}")
             self._publish("human_review.resolved", {
@@ -933,10 +873,10 @@ class Orchestrator:
             return "approved"
 
         if status == "need_revise":
-            await pm.write_review_status(REVIEW_STATUS_NEED_REVISE)
-            await pm.write_human_feedback(feedback)
+            await self._pm.write_review_status(REVIEW_STATUS_NEED_REVISE)
+            await self._pm.write_human_feedback(feedback)
             try:
-                await pm.update_status("解读中")
+                await self._pm.update_status("解读中")
             except Exception as exc:
                 print(f"[Orchestrator] 警告: 回退状态失败: {exc}")
             self._publish("human_review.resolved", {
@@ -954,9 +894,9 @@ class Orchestrator:
             return "need_revise"
 
         # timeout
-        await pm.write_review_status(REVIEW_STATUS_TIMEOUT)
+        await self._pm.write_review_status(REVIEW_STATUS_TIMEOUT)
         try:
-            await pm.update_status(STATUS_PENDING_REVIEW)
+            await self._pm.update_status(STATUS_PENDING_REVIEW)
         except Exception as exc:
             print(f"[Orchestrator] 警告: 切换到待人审状态失败: {exc}")
         self._publish("human_review.resolved", {
@@ -1004,7 +944,7 @@ class Orchestrator:
 
         try:
             from openai import AsyncOpenAI
-            proj = await ProjectMemory(self.record_id).load()
+            proj = await self._pm.load()
             client = AsyncOpenAI(
                 base_url=LLM_BASE_URL,
                 api_key=LLM_API_KEY,
@@ -1108,20 +1048,9 @@ class Orchestrator:
 
     async def _get_review_threshold(self) -> float:
         try:
-            pm = ProjectMemory(self.record_id)
-            proj = await pm.load()
+            proj = await self._pm.load()
             project_type = (proj.project_type or "").strip()
-            threshold = REVIEW_THRESHOLDS_BY_PROJECT_TYPE.get(project_type, REVIEW_PASS_THRESHOLD_DEFAULT)
-            try:
-                await pm.write_review_summary(
-                    proj.review_summary or "",
-                    float(proj.review_pass_rate or 0.0),
-                    threshold=threshold,
-                    red_flag=getattr(proj, "review_red_flag", "") or "",
-                )
-            except Exception:
-                pass
-            return threshold
+            return REVIEW_THRESHOLDS_BY_PROJECT_TYPE.get(project_type, REVIEW_PASS_THRESHOLD_DEFAULT)
         except Exception as exc:
             logger.exception("获取审核阈值失败")
             print(f"[Orchestrator] 警告: 获取审核阈值失败: {type(exc).__name__}: {exc}")
@@ -1129,8 +1058,7 @@ class Orchestrator:
 
     async def _get_review_summary(self) -> str:
         try:
-            pm = ProjectMemory(self.record_id)
-            proj = await pm.load()
+            proj = await self._pm.load()
             return proj.review_summary or ""
         except Exception as exc:
             logger.exception("获取审核总评失败")
@@ -1139,8 +1067,7 @@ class Orchestrator:
 
     async def _get_review_red_flag(self) -> str:
         try:
-            pm = ProjectMemory(self.record_id)
-            proj = await pm.load()
+            proj = await self._pm.load()
             return (proj.review_red_flag or "").strip()
         except Exception as exc:
             logger.exception("获取审核红线风险失败")
@@ -1149,8 +1076,7 @@ class Orchestrator:
 
     async def _get_project_review_status(self) -> str:
         try:
-            pm = ProjectMemory(self.record_id)
-            proj = await pm.load()
+            proj = await self._pm.load()
             return getattr(proj, "review_status", "") or ""
         except Exception as exc:
             logger.exception("获取人审状态失败")
@@ -1159,9 +1085,8 @@ class Orchestrator:
 
     async def _get_review_pass_rate(self) -> float | None:
         try:
-            pm = ProjectMemory(self.record_id)
-            raw_fields = await pm._client.get_record(pm._table_id, self.record_id)
-            raw_value = raw_fields.get(FP["review_pass_rate"])
+            proj = await self._pm.load()
+            raw_value = proj.review_pass_rate
             if raw_value in (None, "", []):
                 return 0.5
             return float(raw_value)
@@ -1219,9 +1144,8 @@ class Orchestrator:
             return project_level_rate
 
         try:
-            pm = ProjectMemory(self.record_id)
-            proj = await pm.load()
-            await pm.write_review_summary(
+            proj = await self._pm.load()
+            await self._pm.write_review_summary(
                 proj.review_summary or "",
                 row_rate,
                 threshold=float(getattr(proj, "review_threshold", 0.0) or 0.0),
@@ -1235,8 +1159,7 @@ class Orchestrator:
 
     async def _get_project_name(self) -> str:
         try:
-            pm = ProjectMemory(self.record_id)
-            proj = await pm.load()
+            proj = await self._pm.load()
             return proj.client_name or "未知客户"
         except Exception:
             return "未知客户"
@@ -1256,9 +1179,10 @@ class Orchestrator:
             "project_name": project_name,
         })
 
-        deduped: dict[str, dict] = {}
+        deduped: dict[tuple[str, str], dict] = {}
         for item in pending:
-            deduped[item["role_id"]] = item
+            platform = (item.get("task_filter") or {}).get("platform", "")
+            deduped[(item["role_id"], platform)] = item
         unique_pending = list(deduped.values())
 
         em = ExperienceManager()

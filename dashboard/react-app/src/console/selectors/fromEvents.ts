@@ -22,6 +22,7 @@ import type {
   ExperienceEvolution,
   ExperiencePhase,
   Milestone,
+  NegotiationEntry,
   PlanBlock,
   PMDeck,
   Platform,
@@ -267,6 +268,11 @@ interface EventSnapshot {
   experienceLoadedRoles: string[];
   experienceSettled: boolean;
   experienceSummary: { total: number; passed: number; merged: number; settled: number };
+
+  /** 协商日志 */
+  negotiationEntries: NegotiationEntry[];
+  negotiationTotalRounds: number;
+  negotiationTotalMessages: number;
 }
 
 interface ContentRowState {
@@ -310,6 +316,9 @@ function aggregate(events: PipelineEvent[]): EventSnapshot {
     experienceLoadedRoles: [],
     experienceSettled: false,
     experienceSummary: { total: 0, passed: 0, merged: 0, settled: 0 },
+    negotiationEntries: [],
+    negotiationTotalRounds: 0,
+    negotiationTotalMessages: 0,
   };
 
   /** 记录 tool.called 时间戳，用于和 tool.returned 配对计算耗时 */
@@ -590,6 +599,97 @@ function aggregate(events: PipelineEvent[]): EventSnapshot {
           card.wikiSaved = !!p.wiki_saved;
           if (typeof p.confidence === "number") card.confidence = p.confidence;
         }
+        break;
+      }
+
+      case "negotiation.started": {
+        const upstream = asString(p.upstream_name) || asString(p.upstream_role);
+        const downstream = asString(p.downstream_name) || asString(p.downstream_role);
+        snap.negotiationEntries.push({
+          time: shortTime(evt.timestamp),
+          upstream,
+          downstream,
+          phase: "started",
+        });
+        snap.auditLog.push({
+          time: shortTime(evt.timestamp),
+          name: `协商启动: ${downstream} → ${upstream}`,
+          durMs: 0,
+          kind: "info",
+        });
+        break;
+      }
+
+      case "negotiation.message": {
+        const sender = asString(p.sender_name) || asString(p.sender);
+        const receiver = asString(p.receiver_name) || asString(p.receiver);
+        snap.negotiationEntries.push({
+          time: shortTime(evt.timestamp),
+          upstream: receiver,
+          downstream: sender,
+          phase: "message",
+          content: clamp(asString(p.content), 120),
+          round: typeof p.round === "number" ? p.round : undefined,
+        });
+        snap.negotiationTotalMessages += 1;
+        snap.auditLog.push({
+          time: shortTime(evt.timestamp),
+          name: `协商消息: ${sender}`,
+          durMs: 0,
+          kind: "info",
+        });
+        break;
+      }
+
+      case "negotiation.response": {
+        const sender = asString(p.sender_name) || asString(p.sender);
+        const resolved = !!p.resolved;
+        snap.negotiationEntries.push({
+          time: shortTime(evt.timestamp),
+          upstream: sender,
+          downstream: asString(p.receiver_name) || asString(p.receiver),
+          phase: "response",
+          content: clamp(asString(p.content), 120),
+          round: typeof p.round === "number" ? p.round : undefined,
+          resolved,
+        });
+        snap.negotiationTotalMessages += 1;
+        snap.auditLog.push({
+          time: shortTime(evt.timestamp),
+          name: `协商回应: ${sender}` + (resolved ? " ✓共识" : ""),
+          durMs: 0,
+          kind: resolved ? "ok" : "info",
+        });
+        break;
+      }
+
+      case "negotiation.completed": {
+        const rounds = typeof p.rounds === "number" ? p.rounds : 0;
+        snap.negotiationTotalRounds += rounds;
+        snap.negotiationEntries.push({
+          time: shortTime(evt.timestamp),
+          upstream: asString(p.upstream_role),
+          downstream: asString(p.downstream_role),
+          phase: "completed",
+          round: rounds,
+        });
+        snap.auditLog.push({
+          time: shortTime(evt.timestamp),
+          name: `协商完成: ${rounds} 轮`,
+          durMs: 0,
+          kind: "ok",
+        });
+        break;
+      }
+
+      case "negotiation.skipped": {
+        snap.negotiationEntries.push({
+          time: shortTime(evt.timestamp),
+          upstream: "",
+          downstream: evt.agent_role || "",
+          phase: "skipped",
+          content: asString(p.reason),
+        });
         break;
       }
 
@@ -1218,5 +1318,10 @@ export function projectAgentSession(events: PipelineEvent[]): AgentSession {
     toolStats: buildToolStats(snap),
     riskBadges: buildRiskBadges(snap),
     experienceEvolution: buildExperienceEvolution(snap),
+    negotiationLog: {
+      entries: snap.negotiationEntries,
+      totalRounds: snap.negotiationTotalRounds,
+      totalMessages: snap.negotiationTotalMessages,
+    },
   };
 }

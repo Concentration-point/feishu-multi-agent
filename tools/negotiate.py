@@ -6,21 +6,13 @@ Agent 可通过此工具向上游/下游角色提问、提建议，系统会模�
 
 import logging
 from tools import AgentContext
-from config import FEISHU_CHAT_ID
+from agents.base import load_soul_snippet
+from config import FEISHU_CHAT_ID, ROLE_NAMES
 
 logger = logging.getLogger(__name__)
 
-_ROLE_NAMES = {
-    "account_manager": "客户经理",
-    "strategist": "策略师",
-    "copywriter": "文案",
-    "reviewer": "审核",
-    "project_manager": "项目经理",
-    "data_analyst": "数据分析师",
-}
-
 # 可协商的目标角色列表
-_VALID_TARGETS = list(_ROLE_NAMES.keys())
+_VALID_TARGETS = list(ROLE_NAMES.keys())
 
 SCHEMA = {
     "type": "function",
@@ -66,14 +58,14 @@ async def execute(params: dict, context: AgentContext) -> str:
     if not content.strip():
         return "错误: 协商内容不能为空"
 
-    if target_role not in _ROLE_NAMES:
-        return f"错误: 无效的目标角色 '{target_role}'，可选: {list(_ROLE_NAMES.keys())}"
+    if target_role not in ROLE_NAMES:
+        return f"错误: 无效的目标角色 '{target_role}'，可选: {list(ROLE_NAMES.keys())}"
 
     if target_role == context.role_id:
         return "错误: 不能和自己协商"
 
-    sender_name = _ROLE_NAMES.get(context.role_id, context.role_id)
-    target_name = _ROLE_NAMES.get(target_role, target_role)
+    sender_name = ROLE_NAMES.get(context.role_id, context.role_id)
+    target_name = ROLE_NAMES.get(target_role, target_role)
 
     type_labels = {
         "question": "提问",
@@ -128,11 +120,11 @@ async def _generate_response(
     from config import LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, LLM_TIMEOUT_SECONDS
     from openai import AsyncOpenAI
 
-    sender_name = _ROLE_NAMES.get(sender_role, sender_role)
-    target_name = _ROLE_NAMES.get(target_role, target_role)
+    sender_name = ROLE_NAMES.get(sender_role, sender_role)
+    target_name = ROLE_NAMES.get(target_role, target_role)
 
     # 加载目标角色的 soul.md 作为人格
-    soul_context = _load_soul_snippet(target_role)
+    soul_context = load_soul_snippet(target_role)
 
     type_labels = {"question": "提问", "proposal": "建议", "accept": "接受", "concede": "让步"}
     label = type_labels.get(msg_type, msg_type)
@@ -175,23 +167,6 @@ async def _generate_response(
         return f"（{target_name}暂时无法回应: {type(e).__name__}）"
 
 
-def _load_soul_snippet(role_id: str) -> str:
-    """加载角色 soul.md 的核心描述片段（前几行正文）。"""
-    from pathlib import Path
-    soul_path = Path(__file__).resolve().parents[1] / "agents" / role_id / "soul.md"
-    if not soul_path.exists():
-        return ""
-    try:
-        text = soul_path.read_text(encoding="utf-8")
-        # 跳过 frontmatter
-        if text.startswith("---"):
-            parts = text.split("---", 2)
-            if len(parts) >= 3:
-                text = parts[2]
-        # 取前 500 字作为人格上下文
-        return text.strip()[:500]
-    except Exception:
-        return ""
 
 
 async def _broadcast_negotiation(title: str, content: str, color: str) -> None:

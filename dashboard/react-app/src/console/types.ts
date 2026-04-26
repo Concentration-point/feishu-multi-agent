@@ -155,6 +155,24 @@ export interface KnowledgeChip {
   kind: ToolKind;
 }
 
+/** 协商日志条目 */
+export interface NegotiationEntry {
+  time: string;
+  upstream: string;
+  downstream: string;
+  /** "started" | "message" | "response" | "completed" | "skipped" */
+  phase: string;
+  content?: string;
+  round?: number;
+  resolved?: boolean;
+}
+
+export interface NegotiationLog {
+  entries: NegotiationEntry[];
+  totalRounds: number;
+  totalMessages: number;
+}
+
 export interface StageHeaderMeta {
   label: string;
   value: string;
@@ -246,4 +264,7 @@ export interface AgentSession {
 
   /** 经验进化可视化 */
   experienceEvolution: ExperienceEvolution;
+
+  /** 协商日志 */
+  negotiationLog: NegotiationLog;
 }

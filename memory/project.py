@@ -14,6 +14,8 @@ from config import (
     CONTENT_TABLE_ID,
     FIELD_MAP_PROJECT as FP,
     FIELD_MAP_CONTENT as FC,
+    safe_float as _safe_float,
+    safe_int as _safe_int,
 )
 from feishu.bitable import BitableClient
 
@@ -350,16 +352,3 @@ def _date_to_timestamp_ms(date_str: str) -> int:
     dt = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     return int(dt.timestamp() * 1000)
 
-
-def _safe_float(val) -> float:
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _safe_int(val) -> int:
-    try:
-        return int(val)
-    except (TypeError, ValueError):
-        return 0

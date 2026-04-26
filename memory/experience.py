@@ -30,6 +30,8 @@ from config import (
     EXPERIENCE_CONFIDENCE_THRESHOLD,
     EXPERIENCE_MAX_PER_CATEGORY,
     EXPERIENCE_TOP_K,
+    safe_float as _safe_float,
+    safe_int as _safe_int,
 )
 from feishu.bitable import BitableClient
 from tools.write_wiki import (
@@ -375,16 +377,3 @@ class ExperienceManager:
             logger.warning("经验合并失败: %s", e)
             return None
 
-
-def _safe_float(val) -> float:
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _safe_int(val) -> int:
-    try:
-        return int(val)
-    except (TypeError, ValueError):
-        return 0

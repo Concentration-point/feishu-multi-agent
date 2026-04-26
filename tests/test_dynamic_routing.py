@@ -193,7 +193,7 @@ async def test_dynamic_routing_full_sequence():
     async def _fake_red_flag():
         return "无"
 
-    async def _noop_retries(**kw):
+    async def _noop_retries():
         pass
 
     async def _noop_drafts(name):
@@ -208,7 +208,7 @@ async def test_dynamic_routing_full_sequence():
         orch._reconcile_review_pass_rate = _fake_reconcile
         orch._get_project_review_status = _fake_review_status
         orch._get_review_red_flag = _fake_red_flag
-        orch._handle_reviewer_retries = lambda **kw: _noop_retries(**kw)
+        orch._handle_reviewer_retries = _noop_retries
         orch._ensure_copywriter_drafts = lambda name: _noop_drafts(name)
 
         results = await orch.run()
@@ -291,7 +291,7 @@ async def test_dynamic_routing_starts_from_midway_status():
     async def _fake_review_status():
         return "通过"
 
-    async def _noop_retries(**kw):
+    async def _noop_retries():
         pass
 
     async def _noop_drafts(name):
@@ -305,7 +305,7 @@ async def test_dynamic_routing_starts_from_midway_status():
         orch._get_review_pass_rate = _fake_pass_rate
         orch._reconcile_review_pass_rate = _fake_reconcile
         orch._get_project_review_status = _fake_review_status
-        orch._handle_reviewer_retries = lambda **kw: _noop_retries(**kw)
+        orch._handle_reviewer_retries = _noop_retries
         orch._ensure_copywriter_drafts = lambda name: _noop_drafts(name)
 
         results = await orch.run()

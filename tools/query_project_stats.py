@@ -16,6 +16,8 @@ from config import (
     FIELD_MAP_PROJECT as FP,
     FIELD_MAP_CONTENT as FC,
     FIELD_MAP_EXPERIENCE as FE,
+    safe_float as _safe_float,
+    safe_int as _safe_int,
 )
 from feishu.bitable import BitableClient
 
@@ -46,19 +48,6 @@ SCHEMA = {
     },
 }
 
-
-def _safe_float(val) -> float:
-    try:
-        return float(val)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _safe_int(val) -> int:
-    try:
-        return int(val)
-    except (TypeError, ValueError):
-        return 0
 
 
 async def _query_projects(client: BitableClient) -> dict:

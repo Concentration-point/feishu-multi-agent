@@ -201,6 +201,25 @@ def parse_soul(text: str) -> SoulConfig:
     )
 
 
+def load_soul_snippet(role_id: str, max_chars: int = 500) -> str:
+    """加载角色 soul.md 核心描述片段（跳过 frontmatter，返回正文前 max_chars 字）。
+
+    轻量版本，供 Orchestrator 协商和 negotiate 工具注入人格上下文。
+    """
+    soul_path = _AGENTS_DIR / role_id / "soul.md"
+    if not soul_path.exists():
+        return ""
+    try:
+        text = soul_path.read_text(encoding="utf-8")
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) >= 3:
+                text = parts[2]
+        return text.strip()[:max_chars]
+    except Exception:
+        return ""
+
+
 # ── 平台专属 soul 追加式合成（扫描式发现，零硬编码白名单）──
 #
 # 任何角色只要在 agents/{role_id}/platforms/ 下有 {platform}.md 就会触发补丁。

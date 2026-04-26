@@ -235,3 +235,28 @@ NEGOTIATION_MAX_ROUNDS: int = int(os.getenv("NEGOTIATION_MAX_ROUNDS", "2"))
 
 # 是否启用协商机制（可通过环境变量关闭）
 NEGOTIATION_ENABLED: bool = os.getenv("NEGOTIATION_ENABLED", "true").lower() in ("true", "1", "yes")
+
+# ── 角色名称映射（Agent role_id → 中文展示名）──
+ROLE_NAMES: dict[str, str] = {
+    "account_manager": "客户经理",
+    "strategist": "策略师",
+    "copywriter": "文案",
+    "reviewer": "审核",
+    "project_manager": "项目经理",
+    "data_analyst": "数据分析师",
+}
+
+
+# ── 通用安全类型转换 ──
+def safe_float(val) -> float:
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def safe_int(val) -> int:
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return 0

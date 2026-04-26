@@ -325,3 +325,97 @@ class TestEventOrdering:
         scored_idx = types.index("experience.scored")
         saved_idx = types.index("experience.saved")
         assert scored_idx < saved_idx
+
+
+# ── P11 回归：fan-out 多平台经验不丢失 ──
+
+class TestFanoutExperienceDedup:
+    """验证 _settle_experiences 不会将 copywriter fan-out 的多平台经验去重为一条。"""
+
+    @pytest.fixture
+    def orch(self):
+        from dashboard.event_bus import EventBus
+        from orchestrator import Orchestrator
+        bus = EventBus()
+        o = Orchestrator(record_id="recFANOUT001", event_bus=bus)
+        o.stage_results = []
+        o.reviewer_retries = 0
+        return o, bus
+
+    def _make_fanout_pending(self, platform: str) -> dict:
+        return {
+            "role_id": "copywriter",
+            "card": {
+                "situation": f"{platform}场景",
+                "action": f"{platform}行动行动",
+                "outcome": f"{platform}结果结果",
+                "lesson": f"{platform}经验教训足够长",
+                "category": "电商大促",
+                "applicable_roles": ["copywriter"],
+            },
+            "agent": None,
+            "task_filter": {"platform": platform},
+        }
+
+    @pytest.mark.asyncio
+    async def test_fanout_all_platforms_settled(self, orch):
+        """3 个平台的 copywriter 经验应各自独立沉淀，不被去重为 1 条。"""
+        from dataclasses import dataclass
+        @dataclass
+        class FakeResult:
+            ok: bool
+            role_id: str
+        o, bus = orch
+        o.stage_results = [FakeResult(ok=True, role_id="copywriter")]
+
+        pending = [
+            self._make_fanout_pending("小红书"),
+            self._make_fanout_pending("抖音"),
+            self._make_fanout_pending("公众号"),
+        ]
+
+        with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
+            with patch("orchestrator.ExperienceManager") as MockEM:
+                em = MockEM.return_value
+                em.check_dedup = AsyncMock(return_value=[])
+                em.save_experience = AsyncMock(return_value="recEXP")
+                em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
+                await o._settle_experiences(pending, "测试项目", 0.8)
+
+        events = bus.get_history("recFANOUT001")
+        scored = [e for e in events if e["event_type"] == "experience.scored"]
+        saved = [e for e in events if e["event_type"] == "experience.saved"]
+        completed = [e for e in events if e["event_type"] == "experience.settle_completed"]
+
+        assert len(scored) == 3, f"应有 3 条 scored 事件，实际 {len(scored)}"
+        assert len(saved) == 3, f"应有 3 条 saved 事件，实际 {len(saved)}"
+        assert completed[0]["payload"]["total_distilled"] == 3
+        assert completed[0]["payload"]["final_settled"] == 3
+
+    @pytest.mark.asyncio
+    async def test_fanout_same_platform_deduped(self, orch):
+        """同一平台重复出现应去重为 1 条。"""
+        from dataclasses import dataclass
+        @dataclass
+        class FakeResult:
+            ok: bool
+            role_id: str
+        o, bus = orch
+        o.stage_results = [FakeResult(ok=True, role_id="copywriter")]
+
+        pending = [
+            self._make_fanout_pending("小红书"),
+            self._make_fanout_pending("小红书"),  # 重复
+        ]
+
+        with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
+            with patch("orchestrator.ExperienceManager") as MockEM:
+                em = MockEM.return_value
+                em.check_dedup = AsyncMock(return_value=[])
+                em.save_experience = AsyncMock(return_value="recEXP")
+                em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
+                await o._settle_experiences(pending, "测试项目", 0.8)
+
+        events = bus.get_history("recFANOUT001")
+        scored = [e for e in events if e["event_type"] == "experience.scored"]
+        assert len(scored) == 1, f"同平台应去重为 1 条，实际 {len(scored)}"
