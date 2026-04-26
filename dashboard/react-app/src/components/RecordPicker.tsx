@@ -8,7 +8,7 @@
  * 键盘支持：↑↓ 选中，Enter 触发，Esc 关闭（Esc 由上层 App.tsx 接管）。
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { motion } from "framer-motion";
 import {
   RefreshCw,
@@ -18,6 +18,8 @@ import {
   ArrowUp,
   ArrowDown,
   CornerDownLeft,
+  AlertTriangle,
+  Loader,
 } from "lucide-react";
 import type { RecordItem, RunInfo } from "../types";
 
@@ -27,7 +29,7 @@ interface RecordPickerProps {
   onReplay: (recordId: string, clientName: string) => void;
 }
 
-type Mode = "replay" | "run";
+type Mode = "replay" | "run" | "aborted" | "running";
 
 interface EnrichedRecord extends RecordItem {
   mode: Mode;
@@ -84,8 +86,8 @@ export function RecordPicker({
     }
   }, [visible]);
 
-  // 把 records + runs 合成单一列表，分组后筛选
-  const { replays, runnable, filteredCount } = useMemo(() => {
+  // 把 records + runs 合成单一列表，按 4 分类分组
+  const { replays, aborteds, runnings, runnable, filteredCount } = useMemo(() => {
     const q = query.trim().toLowerCase();
     const filter = (r: RecordItem) => {
       if (!q) return true;
@@ -98,27 +100,45 @@ export function RecordPicker({
     };
 
     const replays: EnrichedRecord[] = [];
+    const aborteds: EnrichedRecord[] = [];
+    const runnings: EnrichedRecord[] = [];
     const runnable: EnrichedRecord[] = [];
     for (const r of records) {
       if (!filter(r)) continue;
       const run = runs.get(r.record_id);
-      if (run && run.status === "completed") {
-        replays.push({ ...r, mode: "replay", run });
-      } else {
-        runnable.push({ ...r, mode: "run", run });
+      if (!run) {
+        runnable.push({ ...r, mode: "run" });
+        continue;
+      }
+      switch (run.status) {
+        case "completed":
+          replays.push({ ...r, mode: "replay", run });
+          break;
+        case "running":
+          runnings.push({ ...r, mode: "running", run });
+          break;
+        case "aborted":
+        case "incomplete":
+          aborteds.push({ ...r, mode: "aborted", run });
+          break;
+        default:
+          runnable.push({ ...r, mode: "run", run });
       }
     }
     return {
       replays,
+      aborteds,
+      runnings,
       runnable,
-      filteredCount: replays.length + runnable.length,
+      filteredCount:
+        replays.length + aborteds.length + runnings.length + runnable.length,
     };
   }, [records, runs, query]);
 
   // 统一扁平列表用于键盘导航
   const flat: EnrichedRecord[] = useMemo(
-    () => [...replays, ...runnable],
-    [replays, runnable],
+    () => [...runnings, ...replays, ...aborteds, ...runnable],
+    [runnings, replays, aborteds, runnable],
   );
 
   useEffect(() => {
@@ -126,8 +146,12 @@ export function RecordPicker({
   }, [flat.length]);
 
   const trigger = (rec: EnrichedRecord) => {
-    if (rec.mode === "replay") onReplay(rec.record_id, rec.client_name);
-    else onSelect(rec.record_id, rec.client_name);
+    // replay/running 都加载历史事件流；aborted/run 都触发新流水线
+    if (rec.mode === "replay" || rec.mode === "running") {
+      onReplay(rec.record_id, rec.client_name);
+    } else {
+      onSelect(rec.record_id, rec.client_name);
+    }
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -260,14 +284,14 @@ export function RecordPicker({
           />
         )}
 
-        {!loading && !error && replays.length > 0 && (
+        {!loading && !error && runnings.length > 0 && (
           <Group
-            label="有回放记录"
-            count={replays.length}
-            hint="Agent 已跑过、可直接再看一遍"
-            tintColor="var(--color-info)"
+            label="进行中"
+            count={runnings.length}
+            hint="正在跑，点击观察实时事件"
+            tintColor="var(--color-accent)"
           >
-            {replays.map((r, i) => (
+            {runnings.map((r, i) => (
               <Row
                 key={r.record_id}
                 record={r}
@@ -280,19 +304,61 @@ export function RecordPicker({
           </Group>
         )}
 
+        {!loading && !error && replays.length > 0 && (
+          <Group
+            label="真正完成"
+            count={replays.length}
+            hint="5 项判据全过，可直接回看"
+            tintColor="var(--color-info)"
+            startIndex={runnings.length}
+          >
+            {replays.map((r, i) => (
+              <Row
+                key={r.record_id}
+                record={r}
+                index={runnings.length + i}
+                cursorIdx={cursor}
+                onTrigger={trigger}
+                onHover={setCursor}
+              />
+            ))}
+          </Group>
+        )}
+
+        {!loading && !error && aborteds.length > 0 && (
+          <Group
+            label="半途中止"
+            count={aborteds.length}
+            hint="路由 0 步 / 红线 / 人审超时等，可重跑"
+            tintColor="#f59e0b"
+            startIndex={runnings.length + replays.length}
+          >
+            {aborteds.map((r, i) => (
+              <Row
+                key={r.record_id}
+                record={r}
+                index={runnings.length + replays.length + i}
+                cursorIdx={cursor}
+                onTrigger={trigger}
+                onHover={setCursor}
+              />
+            ))}
+          </Group>
+        )}
+
         {!loading && !error && runnable.length > 0 && (
           <Group
-            label="可触发"
+            label="待触发"
             count={runnable.length}
             hint="尚未运行过，点击启动流水线"
             tintColor="var(--color-accent)"
-            startIndex={replays.length}
+            startIndex={runnings.length + replays.length + aborteds.length}
           >
             {runnable.map((r, i) => (
               <Row
                 key={r.record_id}
                 record={r}
-                index={replays.length + i}
+                index={runnings.length + replays.length + aborteds.length + i}
                 cursorIdx={cursor}
                 onTrigger={trigger}
                 onHover={setCursor}
@@ -398,6 +464,57 @@ function Group({
   );
 }
 
+// 4 模式的视觉与文案统一来源——避免散布在多处
+const MODE_META: Record<
+  Mode,
+  {
+    label: string;
+    iconNode: (size: number) => ReactElement;
+    color: string;
+    border: string;
+    bg: string;
+    bgHover: string;
+    tooltip: string;
+  }
+> = {
+  replay: {
+    label: "回放",
+    iconNode: (s) => <History size={s} strokeWidth={2.4} />,
+    color: "var(--color-info)",
+    border: "rgba(96, 165, 250, 0.35)",
+    bg: "rgba(96, 165, 250, 0.08)",
+    bgHover: "rgba(96, 165, 250, 0.18)",
+    tooltip: "加载历史事件回放",
+  },
+  running: {
+    label: "观察",
+    iconNode: (s) => <Loader size={s} strokeWidth={2.4} />,
+    color: "var(--color-accent)",
+    border: "rgba(110, 231, 183, 0.45)",
+    bg: "rgba(16, 185, 129, 0.10)",
+    bgHover: "rgba(16, 185, 129, 0.22)",
+    tooltip: "进行中，加载实时事件流",
+  },
+  aborted: {
+    label: "重跑",
+    iconNode: (s) => <AlertTriangle size={s} strokeWidth={2.2} />,
+    color: "#f59e0b",
+    border: "rgba(245, 158, 11, 0.40)",
+    bg: "rgba(245, 158, 11, 0.10)",
+    bgHover: "rgba(245, 158, 11, 0.22)",
+    tooltip: "上次半途中止，点击重新触发",
+  },
+  run: {
+    label: "触发",
+    iconNode: (s) => <Play size={s} strokeWidth={2.6} />,
+    color: "var(--color-accent)",
+    border: "rgba(110, 231, 183, 0.35)",
+    bg: "rgba(16, 185, 129, 0.08)",
+    bgHover: "rgba(16, 185, 129, 0.18)",
+    tooltip: "触发真实流水线",
+  },
+};
+
 function Row({
   record,
   index,
@@ -412,7 +529,7 @@ function Row({
   onHover: (i: number) => void;
 }) {
   const selected = index === cursorIdx;
-  const isReplay = record.mode === "replay";
+  const meta = MODE_META[record.mode];
 
   return (
     <div
@@ -454,10 +571,12 @@ function Row({
         style={{
           display: "grid",
           placeItems: "center",
-          color: isReplay ? "var(--color-info)" : "var(--color-accent)",
+          color: meta.color,
+          animation:
+            record.mode === "running" ? "rp-spin 1.4s linear infinite" : undefined,
         }}
       >
-        {isReplay ? <History size={14} /> : <Play size={13} />}
+        {meta.iconNode(14)}
       </span>
 
       {/* 客户名 + 状态 */}
@@ -518,24 +637,24 @@ function Row({
       </div>
 
       {/* 右侧行动按钮 · 点击入口收敛到这里 */}
-      <ActionButton isReplay={isReplay} record={record} onTrigger={onTrigger} />
+      <ActionButton record={record} onTrigger={onTrigger} />
     </div>
   );
 }
 
 function ActionButton({
-  isReplay,
   record,
   onTrigger,
 }: {
-  isReplay: boolean;
   record: EnrichedRecord;
   onTrigger: (r: EnrichedRecord) => void;
 }) {
-  const color = isReplay ? "var(--color-info)" : "var(--color-accent)";
-  const borderColor = isReplay ? "rgba(96, 165, 250, 0.35)" : "rgba(110, 231, 183, 0.35)";
-  const bg = isReplay ? "rgba(96, 165, 250, 0.08)" : "rgba(16, 185, 129, 0.08)";
-  const bgHover = isReplay ? "rgba(96, 165, 250, 0.18)" : "rgba(16, 185, 129, 0.18)";
+  const meta = MODE_META[record.mode];
+  const showCount = record.mode === "replay" || record.mode === "running";
+  const tooltipExtra =
+    record.mode === "aborted" && record.run?.abort_reason
+      ? ` (${record.run.abort_reason})`
+      : "";
 
   return (
     <motion.button
@@ -547,7 +666,7 @@ function ActionButton({
       whileHover={{ scale: 1.03 }}
       whileTap={{ scale: 0.96 }}
       transition={{ type: "spring", stiffness: 400, damping: 26 }}
-      title={isReplay ? "加载历史事件回放" : "触发真实流水线"}
+      title={meta.tooltip + tooltipExtra}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -558,27 +677,31 @@ function ActionButton({
         fontSize: "12.5px",
         fontWeight: 500,
         letterSpacing: "0.02em",
-        color,
-        background: bg,
-        border: `1px solid ${borderColor}`,
+        color: meta.color,
+        background: meta.bg,
+        border: `1px solid ${meta.border}`,
         cursor: "pointer",
         whiteSpace: "nowrap",
         transition: "background 0.16s",
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = bgHover;
+        e.currentTarget.style.background = meta.bgHover;
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = bg;
+        e.currentTarget.style.background = meta.bg;
       }}
     >
-      {isReplay ? (
-        <History size={12} strokeWidth={2.4} />
-      ) : (
-        <Play size={11} strokeWidth={2.6} />
-      )}
-      <span>{isReplay ? "回放" : "触发"}</span>
-      {isReplay && (
+      <span
+        style={{
+          display: "inline-flex",
+          animation:
+            record.mode === "running" ? "rp-spin 1.4s linear infinite" : undefined,
+        }}
+      >
+        {meta.iconNode(12)}
+      </span>
+      <span>{meta.label}</span>
+      {showCount && (
         <span
           className="font-mono"
           style={{

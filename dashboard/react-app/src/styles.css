@@ -141,6 +141,12 @@ body {
 }
 .pulse-icon { animation: pulse-glow 1.5s ease-in-out infinite; }
 
+/* RecordPicker · running 模式图标旋转 */
+@keyframes rp-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
 /* ── Record Picker ── */
 .record-picker {
   padding: 12px 28px;

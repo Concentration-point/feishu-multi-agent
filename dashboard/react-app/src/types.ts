@@ -44,11 +44,17 @@ export interface StageInfo {
 
 export type ConnectionStatus = "idle" | "live" | "done" | "error" | "replay";
 
+export type RunStatus = "completed" | "aborted" | "running" | "incomplete";
+
 export interface RunInfo {
   record_id: string;
   project_name: string;
   event_count: number;
-  status: string;
+  status: RunStatus;
+  /** 半途中止时的原因码，如 route_zero_steps / no_ok_stage / status_not_done:xxx */
+  abort_reason?: string | null;
+  /** 后端裁决类型：completed | aborted | aborted_retro | halted */
+  verdict?: string | null;
   started_at: number;
   completed_at: number;
 }

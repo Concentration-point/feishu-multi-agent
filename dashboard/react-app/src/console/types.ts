@@ -265,6 +265,6 @@ export interface AgentSession {
   /** 经验进化可视化 */
   experienceEvolution: ExperienceEvolution;
 
-  /** 协商日志 */
-  negotiationLog: NegotiationLog;
+  /** 协商日志（mock 中未必提供，因此置为可选） */
+  negotiationLog?: NegotiationLog;
 }

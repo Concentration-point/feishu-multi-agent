@@ -17,6 +17,12 @@ logger = logging.getLogger(__name__)
 
 _RUNS_DIR = Path(__file__).parent.parent / "runs"
 
+# 进行中判据：最近 N 秒内有事件且没有终止事件 → "running"
+_RUNNING_FRESH_SECONDS = 300
+
+# 真正完成 5 判据中的最低通过率（追溯重分类老 jsonl 时的兜底，与 config.REVIEW_PASS_THRESHOLD_DEFAULT 对齐）
+_RETRO_PASS_RATE_THRESHOLD = 0.6
+
 
 class EventBus:
     """按 record_id 隔离的事件总线，支持全局订阅 + 磁盘持久化。"""
@@ -115,16 +121,19 @@ class EventBus:
         return all_events
 
     def list_pipelines(self) -> list[dict]:
-        """返回内存中已知的 pipeline 列表。"""
+        """返回内存中已知的 pipeline 列表（与磁盘版 list_runs 同分类规则）。"""
+        now = time.time()
         result = []
         for rid, events in self._history.items():
             started = next((e for e in events if e["event_type"] == "pipeline.started"), None)
-            completed = next((e for e in events if e["event_type"] == "pipeline.completed"), None)
+            classification = _classify_run(events, now)
             result.append({
                 "record_id": rid,
                 "project_name": (started or {}).get("payload", {}).get("project_name", ""),
                 "event_count": len(events),
-                "status": "completed" if completed else "running",
+                "status": classification["status"],
+                "abort_reason": classification.get("abort_reason"),
+                "verdict": classification.get("verdict"),
                 "started_at": events[0]["timestamp"] if events else 0,
             })
         result.sort(key=lambda x: x["started_at"], reverse=True)
@@ -171,46 +180,140 @@ class EventBus:
 
     @staticmethod
     def list_runs() -> list[dict]:
-        """列出磁盘上所有执行记录。"""
+        """列出磁盘上所有执行记录，按 4 分类输出。
+
+        status ∈ {completed, aborted, running, incomplete}：
+            completed   — 5 判据全过的真正完成（新事件信任 verdict 字段；老事件追溯重分类）
+            aborted     — 已终止但未达完成判据（pipeline.aborted / pipeline.halted / 老脏数据）
+            running     — 末事件距今 < 5 分钟，且无终止事件
+            incomplete  — 无终止事件且很久没动静（疑似进程死亡）
+        """
         if not _RUNS_DIR.exists():
             return []
         result = []
+        now = time.time()
         for run_dir in _RUNS_DIR.iterdir():
             if not run_dir.is_dir():
                 continue
             events_file = run_dir / "events.jsonl"
             if not events_file.exists():
                 continue
-            # 读取首行和末行获取摘要
-            lines = events_file.read_text(encoding="utf-8").splitlines()
-            lines = [l for l in lines if l.strip()]
+            lines = [l for l in events_file.read_text(encoding="utf-8").splitlines() if l.strip()]
             if not lines:
                 continue
-            try:
-                first = json.loads(lines[0])
-                last = json.loads(lines[-1])
-            except json.JSONDecodeError:
-                continue
-            # 从 pipeline.started 事件提取项目名
-            project_name = ""
-            for l in lines[:3]:
+
+            events: list[dict] = []
+            for line in lines:
                 try:
-                    e = json.loads(l)
-                    if e.get("event_type") == "pipeline.started":
-                        project_name = e.get("payload", {}).get("project_name", "")
-                        break
+                    events.append(json.loads(line))
                 except json.JSONDecodeError:
                     continue
+            if not events:
+                continue
+
+            # 项目名从 pipeline.started 事件提取
+            project_name = ""
+            for e in events[:5]:
+                if e.get("event_type") == "pipeline.started":
+                    project_name = e.get("payload", {}).get("project_name", "")
+                    break
+
+            classification = _classify_run(events, now)
             result.append({
                 "record_id": run_dir.name,
                 "project_name": project_name,
-                "event_count": len(lines),
-                "status": "completed" if last.get("event_type") == "pipeline.completed" else "incomplete",
-                "started_at": first.get("timestamp", 0),
-                "completed_at": last.get("timestamp", 0),
+                "event_count": len(events),
+                "status": classification["status"],
+                "abort_reason": classification.get("abort_reason"),
+                "verdict": classification.get("verdict"),
+                "started_at": events[0].get("timestamp", 0),
+                "completed_at": events[-1].get("timestamp", 0),
             })
         result.sort(key=lambda x: x["started_at"], reverse=True)
         return result
+
+
+def _classify_run(events: list[dict], now: float) -> dict:
+    """根据事件序列判定 run 的 4 状态分类。
+
+    优先级：
+      1. 末事件 == pipeline.completed → 信任 verdict（新事件）；无 verdict 则按 5 判据追溯重分类（老事件）
+      2. 末事件 == pipeline.aborted → aborted
+      3. 末事件 == pipeline.halted    → aborted（人审驳回 / 超时）
+      4. 末事件距今 < 5 分钟          → running
+      5. 其它                         → incomplete
+    """
+    if not events:
+        return {"status": "incomplete"}
+
+    last = events[-1]
+    last_type = last.get("event_type", "")
+    last_payload = last.get("payload", {}) or {}
+    last_ts = last.get("timestamp", 0)
+
+    if last_type == "pipeline.completed":
+        # 新事件已带 verdict 字段（orchestrator.py 写入），直接信任
+        verdict = last_payload.get("verdict")
+        if verdict == "completed":
+            return {"status": "completed", "verdict": "completed"}
+        if verdict == "aborted":
+            return {
+                "status": "aborted",
+                "verdict": "aborted",
+                "abort_reason": last_payload.get("abort_reason"),
+            }
+        # 老事件无 verdict，用 5 判据反推（追溯重分类）
+        route_steps = last_payload.get("route_steps", 0) or 0
+        ok_count = last_payload.get("ok_count", 0) or 0
+        status_field = last_payload.get("status", "")
+        pass_rate = last_payload.get("pass_rate")
+        threshold = last_payload.get("review_threshold", _RETRO_PASS_RATE_THRESHOLD)
+
+        passed_all = (
+            route_steps >= 1
+            and ok_count >= 1
+            and status_field == "已完成"
+            and pass_rate is not None
+            and pass_rate >= threshold
+        )
+        if passed_all:
+            return {"status": "completed", "verdict": "completed"}
+        # 推断老脏数据的 abort_reason
+        if route_steps == 0:
+            reason = "route_zero_steps"
+        elif ok_count == 0:
+            reason = "no_ok_stage"
+        elif status_field != "已完成":
+            reason = f"status_not_done:{status_field or 'empty'}"
+        elif pass_rate is None:
+            reason = "no_pass_rate"
+        else:
+            reason = f"below_threshold:{pass_rate:.2f}<{threshold:.2f}"
+        return {
+            "status": "aborted",
+            "verdict": "aborted_retro",
+            "abort_reason": reason,
+        }
+
+    if last_type == "pipeline.aborted":
+        return {
+            "status": "aborted",
+            "verdict": "aborted",
+            "abort_reason": last_payload.get("abort_reason"),
+        }
+
+    if last_type == "pipeline.halted":
+        return {
+            "status": "aborted",
+            "verdict": "halted",
+            "abort_reason": f"halted:{last_payload.get('outcome', 'unknown')}",
+        }
+
+    # 没有任何终止事件
+    if last_ts and now - last_ts < _RUNNING_FRESH_SECONDS:
+        return {"status": "running"}
+
+    return {"status": "incomplete"}
 
 
 # 全局单例
