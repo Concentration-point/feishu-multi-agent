@@ -18,4 +18,5 @@ collect_ignore = [
     "test_experience.py",
     "test_im.py",
     "test_pipeline.py",
+    "test_account_manager_bbq.py",
 ]

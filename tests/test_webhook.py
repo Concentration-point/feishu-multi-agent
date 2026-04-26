@@ -19,8 +19,9 @@ import main as app_main  # noqa: E402
 class DummyOrchestrator:
     started: list[str] = []
 
-    def __init__(self, record_id: str):
+    def __init__(self, record_id: str, event_bus=None):
         self.record_id = record_id
+        self.event_bus = event_bus
 
     async def run(self):
         DummyOrchestrator.started.append(self.record_id)
