@@ -106,12 +106,22 @@ function render(){
       <div class="meta"><div class="kv"><small>套餐</small><strong>${esc(a.plan||'Unknown')}</strong></div><div class="kv"><small>到期</small><strong>${esc(exp)}</strong></div><div class="kv"><small>自动续费</small><strong>${esc(a.autoRenew||'未确认')}</strong></div><div class="kv"><small>工具</small><strong>${esc(a.tool||'Windsurf')}</strong></div></div>
       ${quota('日额度',a.dailyUsed,a.dailyReset)}${quota('周额度',a.weeklyUsed,a.weeklyReset)}
       <div class="notes">${esc(a.notes||'无备注')}</div>
-      <div class="card-actions"><button onclick="openUrl('${enc(a.loginUrl)}')">登录页</button><button onclick="openUrl('${enc(a.manageUrl)}')">订阅页</button><button onclick="editAcc('${a.id}')">编辑/更新额度</button><button class="danger" onclick="delAcc('${a.id}')">删除</button></div>
+      <div class="card-actions"><button class="primary" onclick="openDedicated('${a.id}','profile')">????/???</button><button onclick="openDedicated('${a.id}','billing')">???</button><button onclick="openUrl('${enc(a.loginUrl)}')">????</button><button onclick="editAcc('${a.id}')">??/????</button><button class="danger" onclick="delAcc('${a.id}')">??</button></div>
     </article>`}).join('');
 }
 function quota(label,v,reset){const used=pct(v), r=100-used, cls=qclass(v); return `<div class="quota"><div class="qrow"><span>${label}：已用 ${used}% / 剩余 ${r}%</span><span>${esc(reset||'未填重置')}</span></div><div class="bar"><div class="fill ${cls}" style="width:${used}%"></div></div></div>`}
 function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function enc(s){return encodeURIComponent(s||'')}
+async function openDedicated(id, kind){
+  const a=accounts.find(x=>x.id===id); if(!a)return;
+  const url = kind==='billing' ? (a.manageUrl || 'https://windsurf.com/subscription/manage-plan') : (a.loginUrl || 'https://windsurf.com/profile');
+  try{
+    const r=await fetch('/api/open-profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:a.email,nickname:a.nickname,tool:a.tool,url})});
+    if(r.ok){toast('??????? Profile ??????????????'); return}
+  }catch(e){}
+  openUrl(encodeURIComponent(url));
+  toast('?????????????????? launch-desktop.bat ?????? Profile?');
+}
 function openUrl(u){u=decodeURIComponent(u||''); if(!u){toast('还没填链接');return} window.open(u,'_blank','noopener')}
 function openDialog(){ $('modalTitle').textContent='新增账号'; $('accountForm').reset(); $('id').value=''; $('tool').value='Windsurf'; $('status').value='active'; $('plan').value='Unknown'; $('autoRenew').value='未确认'; $('loginUrl').value='https://windsurf.com/profile'; $('manageUrl').value='https://windsurf.com/subscription/manage-plan'; $('accountDialog').showModal();}
 function closeDialog(){ $('accountDialog').close();}
