@@ -10,7 +10,7 @@
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-Webhook-009688?style=flat-square&logo=fastapi&logoColor=white">
   <img alt="React"   src="https://img.shields.io/badge/React_19-Vite_8-61dafb?style=flat-square&logo=react&logoColor=white">
   <img alt="Feishu"  src="https://img.shields.io/badge/飞书-Bitable_·_IM_·_Wiki-3370ff?style=flat-square">
-  <img alt="Tests"   src="https://img.shields.io/badge/Tests-73_passed-brightgreen?style=flat-square">
+  <img alt="Tests"   src="https://img.shields.io/badge/Tests-100_passed-brightgreen?style=flat-square">
 </p>
 
 </div>
@@ -30,23 +30,23 @@
 ## 🎭 六大 Agent 角色
 
 ```
-┌─────────────────────────────── 项目流水线（Orchestrator 编排）──────────────────────────────┐
-│                                                                                            │
-│   👔 客户经理          🧠 策略师           ✍️ 文案            🔍 审核          📋 项目经理    │
-│   account_manager     strategist         copywriter        reviewer       project_manager  │
-│   Brief 解读          联网调研+内容矩阵    逐平台成稿         通过率+红线判定   排期+交付收口   │
-│        │                   │                  │                 │                │          │
-│        └───── 协商 ────────┴──── 协商 ────────┴──── 协商 ───────┴──── 协商 ──────┘          │
-│                                                                                            │
-└────────────────────────────────────────────────────────────────────────────────────────────-┘
+┌───────────────────── 项目流水线（Orchestrator 状态驱动编排）─────────────────────┐
+│                                                                                │
+│  👔 客户经理    →  🧠 策略师     →  ✍️ 文案      →  🔍 审核    →  📋 项目经理   │
+│  Brief 解读       联网调研          逐平台成稿      通过率+红线    排期+交付收口  │
+│       │                                 ↑              │                       │
+│       ▼                                 └──── 返工 ────┘                       │
+│  🔒 人审门禁                                                                    │
+│                                                                                │
+└────────────────────────────────────────────────────────────────────────────────┘
 
 ┌──────────── 独立 Agent ────────────┐
-│   📊 数据分析师  data_analyst       │
-│   跨项目统计 → 运营周报/洞察/决策    │
+│  📊 数据分析师  data_analyst        │
+│  跨项目统计 → 运营周报/洞察/决策    │
 └────────────────────────────────────┘
 ```
 
-每个角色由 `agents/{role_id}/soul.md` 定义人格、工具白名单和协商风格，**新增角色 = 新建目录 + soul.md，零代码改动**。
+每个角色由 `agents/{role_id}/soul.md` 定义人格与工具白名单，**新增角色 = 新建目录 + soul.md，零代码改动**。
 
 ---
 
@@ -62,22 +62,20 @@ flowchart TD
     D --> E
 
     E --> F1["👔 客户经理<br/>Brief 解读"]
-    F1 -.->|协商| F2
     F1 --> G1{"🔒 人审门禁"}
     G1 -->|通过 / 超时默认同意| F2
     G1 -->|驳回 + 反馈| F1
 
-    F2["🧠 策略师<br/>联网调研 + 内容矩阵"] -.->|协商| F3
+    F2["🧠 策略师<br/>联网调研 + 内容矩阵"]
     F2 --> F3["✍️ 文案<br/>逐平台成稿 · 可并行 fanout"]
     F3 --> F4["🔍 审核<br/>通过率 + 红线判定"]
     F4 -->|不达标 · 最多返工2次| F3
     F4 -->|命中红线| X["⛔ 中止并标记风险"]
-    F4 -.->|协商| F5
     F4 -->|通过| F5["📋 项目经理<br/>排期 + 交付收口"]
 
     F5 --> H["🧬 经验蒸馏<br/>置信度评分 → Bitable + Wiki 双写"]
 
-    E ~~~ T["🔧 21 个工具"]
+    E ~~~ T["🔧 19 个工具"]
     T --- B1["Feishu Bitable"]
     T --- B2["Feishu IM"]
     T --- B3["本地知识库"]
@@ -94,7 +92,6 @@ flowchart TD
 |:---|:---|:---|
 | **状态驱动动态路由** | 从任意中间状态恢复，路由表可配置 | `orchestrator.py`, `config.py:ROUTE_TABLE` |
 | **双入口触发** | CLI + FastAPI Webhook | `main.py` |
-| **Agent 间协商** | 上下游角色自动协商，实时广播飞书+Dashboard | `orchestrator.py`, `tools/negotiate.py` |
 | **结构化审核** | 通过率 / 红线 / 状态 / 总评四字段 | `agents/reviewer/soul.md` |
 | **人审门禁** | 飞书卡片审批，超时可默认同意 | `orchestrator.py:_enter_human_review_gate` |
 | **审核返工循环** | 不达标自动回退文案，最多 2 次 | `orchestrator.py:_handle_reviewer_retries` |
@@ -109,7 +106,6 @@ flowchart TD
 | **跨项目数据分析** | 数据分析师自动生成运营报告 | `tools/query_project_stats.py`, `tools/send_report.py` |
 | **实时 Dashboard** | SSE 事件流 + React 实时面板 | `dashboard/` |
 | **经验进化可视化** | 漏斗摘要 + 卡片详情 + 置信度进度条 | `ExperienceEvolution.tsx` |
-| **协商可视化** | 协商轮次、消息、结果实时展示 | `fromEvents.ts` |
 
 ---
 
@@ -131,19 +127,17 @@ feishu-multi-agent/
 │   ├── contracts/                   #    角色间协作契约（JSON Schema）
 │   └── base.py                      #    唯一 Agent 引擎（ReAct + function calling）
 │
-├── tools/                           # 🔧 21 个工具（Agent 可调）
+├── tools/                           # 🔧 19 个工具（Agent 可调）
 │   ├── read_project.py              #    项目主表读取
 │   ├── write_project.py             #    项目主表写入
 │   ├── search_web.py                #    联网搜索（Tavily）
-│   ├── negotiate.py                 #    Agent 间协商
 │   ├── query_project_stats.py       #    跨项目统计
 │   └── ...                          #    更多工具见 tools/__init__.py
 │
 ├── memory/                          # 🧠 三层记忆
 │   ├── working.py                   #    L0 工作记忆（token 窗口管理）
 │   ├── project.py                   #    L1 项目记忆（Bitable 行映射）
-│   ├── experience.py                #    L2 经验池（Bitable + Wiki 双写）
-│   └── negotiation.py               #    协商状态管理
+│   └── experience.py                #    L2 经验池（Bitable + Wiki 双写）
 │
 ├── feishu/                          # 📡 飞书 API 封装（直调 OpenAPI，不用 SDK）
 │   ├── auth.py                      #    TokenManager 单例
@@ -159,12 +153,12 @@ feishu-multi-agent/
 │   └── static/                      #    构建产物（FastAPI 挂载）
 │
 ├── scripts/                         # 🛠️ 运维脚本
-├── tests/                           # 🧪 73+ 测试用例
+├── tests/                           # 🧪 100 测试用例
 ├── docs/                            # 📄 架构文档 + 验收标准
 ├── demo/                            # 🎬 Demo 脚本 + 样例 Brief
 │
 ├── config.py                        # ⚙️ 配置中心（字段映射/阈值/路由表/角色名）
-├── orchestrator.py                  # 🎯 总编排器（动态路由 + 协商 + 经验沉淀）
+├── orchestrator.py                  # 🎯 总编排器（动态路由 + 人审门禁 + 经验沉淀）
 ├── main.py                          # 🚀 入口（CLI run/sync/serve/report）
 └── requirements.txt
 ```
@@ -236,26 +230,6 @@ knowledge/
 
 ---
 
-## 🤝 Agent 协商机制
-
-每个 Agent 完成后，Orchestrator 自动触发下游角色审阅上游产出的 **结构化协商**：
-
-```
-协商检查点（config.NEGOTIATION_CHECKPOINTS）：
-  客户经理 → 策略师      策略师审阅 Brief 解读
-  策略师   → 文案        文案审阅策略方案
-  审核     → 文案        审核反馈给文案
-  审核     → 项目经理    项目经理审阅审核结果
-```
-
-- 每个检查点最多 **2 轮**（`NEGOTIATION_MAX_ROUNDS`）
-- 每个角色的 soul.md 定义独特的 **协商风格**
-- 全程广播到 **飞书群聊 + Dashboard**
-- Agent 也可通过 `negotiate` 工具主动发起协商（提问/建议/接受/让步）
-- `NEGOTIATION_ENABLED=false` 可关闭
-
----
-
 ## 🚀 快速开始
 
 ### 1️⃣ 安装依赖
@@ -291,7 +265,6 @@ WIKI_SPACE_ID=xxx                  # 启用知识空间同步
 TAVILY_API_KEY=tvly-xxx            # 启用策略师联网调研
 WEBHOOK_VERIFICATION_TOKEN=xxx     # 飞书事件订阅校验
 AUTO_APPROVE_HUMAN_REVIEW=false    # Demo 快跑模式设 true
-NEGOTIATION_ENABLED=true           # Agent 协商机制开关
 ```
 
 ### 3️⃣ 初始化知识库（首次）
@@ -364,7 +337,7 @@ python main.py sync --direction both
 | **Web 框架** | FastAPI + uvicorn |
 | **HTTP 客户端** | httpx |
 | **网页抓取** | trafilatura |
-| **测试** | pytest + pytest-asyncio（73+ 测试用例） |
+| **测试** | pytest + pytest-asyncio（100 测试用例） |
 | **前端** | React 19 + TypeScript + Vite 8 + Tailwind 4 + Zustand + framer-motion |
 | **飞书集成** | 直调 OpenAPI（不依赖官方 SDK） |
 | **Agent 引擎** | **自研 ReAct 循环 + function calling**（不依赖任何 Agent 框架） |
@@ -388,9 +361,9 @@ python main.py sync --direction both
 | 顺序 | 文件 | 要点 |
 |:---:|:---|:---|
 | 1 | `README.md` | 全景视图（你在这里） |
-| 2 | `orchestrator.py` | 编排主循环、动态路由、协商、人审门禁 |
+| 2 | `orchestrator.py` | 编排主循环、动态路由、人审门禁、经验沉淀 |
 | 3 | `agents/base.py` | Agent 引擎、prompt 装配、ReAct 循环 |
-| 4 | `agents/*/soul.md` | 角色人格 + 工具白名单 + 协商风格 |
+| 4 | `agents/*/soul.md` | 角色人格 + 工具白名单 |
 | 5 | `memory/project.py` + `experience.py` | L1 / L2 记忆如何落到 Bitable |
 | 6 | `config.py` | 字段映射、阈值、路由表、开关 |
 | 7 | `sync/wiki_sync.py` | 上行同步白名单逻辑 |
