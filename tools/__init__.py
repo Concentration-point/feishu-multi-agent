@@ -25,7 +25,7 @@ class ToolRegistry:
 
     每个工具文件必须导出:
       - SCHEMA: dict — OpenAI function calling 格式的工具描述
-      - execute: async (params: dict, context: AgentContext) -> str
+      - execute: async (params: dict, context: AgentContext) -> str | dict
     """
 
     def __init__(self):
@@ -76,7 +76,7 @@ class ToolRegistry:
     async def call_tool(
         self, tool_name: str, params: dict, context: AgentContext
     ) -> str:
-        """调用指定工具，返回结果字符串。工具不存在或执行失败时返回错误信息。"""
+        """调用指定工具，返回工具结果；结构化对象会序列化为 JSON 字符串给 LLM。"""
         if tool_name not in self._tools:
             return f"错误: 工具 '{tool_name}' 不存在。可用工具: {self.tool_names}"
         try:
