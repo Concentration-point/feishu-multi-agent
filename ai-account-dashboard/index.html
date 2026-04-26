@@ -1,0 +1,128 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Account Dashboard</title>
+  <style>
+    :root{--bg:#0b1020;--panel:#11182c;--panel2:#151f38;--text:#eaf0ff;--muted:#94a3b8;--line:#26324f;--blue:#60a5fa;--green:#34d399;--yellow:#fbbf24;--red:#fb7185;--purple:#a78bfa;--shadow:0 18px 60px rgba(0,0,0,.35);}
+    *{box-sizing:border-box} body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;background:radial-gradient(circle at top left,#1d2a52 0,#0b1020 34%,#070a12 100%);color:var(--text);min-height:100vh}
+    button,input,select,textarea{font:inherit} button{cursor:pointer;border:0;border-radius:12px;padding:10px 14px;color:var(--text);background:#243453} button:hover{filter:brightness(1.12)}
+    .app{max-width:1240px;margin:0 auto;padding:28px}.top{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:22px}.brand h1{margin:0;font-size:30px;letter-spacing:-.04em}.brand p{margin:8px 0 0;color:var(--muted)}.actions{display:flex;gap:10px;flex-wrap:wrap}.primary{background:linear-gradient(135deg,#2563eb,#7c3aed)}.danger{background:#7f1d1d}.ghost{background:transparent;border:1px solid var(--line)}
+    .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:18px}.stat{background:rgba(17,24,44,.84);border:1px solid var(--line);box-shadow:var(--shadow);border-radius:18px;padding:16px}.stat .n{font-size:28px;font-weight:800}.stat .l{color:var(--muted);margin-top:4px}
+    .toolbar{display:flex;gap:10px;margin:18px 0;flex-wrap:wrap}.toolbar input,.toolbar select{background:#0f172a;color:var(--text);border:1px solid var(--line);border-radius:12px;padding:11px 12px;outline:none}.toolbar input{min-width:260px;flex:1}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.card{background:linear-gradient(180deg,rgba(21,31,56,.96),rgba(12,18,34,.96));border:1px solid var(--line);box-shadow:var(--shadow);border-radius:22px;padding:18px;position:relative;overflow:hidden}.card:before{content:"";position:absolute;right:-70px;top:-70px;width:140px;height:140px;background:rgba(96,165,250,.12);border-radius:999px}.card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.name{font-size:20px;font-weight:800}.email{color:var(--muted);font-size:13px;margin-top:3px;word-break:break-all}.badge{font-size:12px;border:1px solid var(--line);background:#0f172a;border-radius:999px;padding:6px 9px;white-space:nowrap}.badge.green{color:var(--green);border-color:rgba(52,211,153,.35)}.badge.yellow{color:var(--yellow);border-color:rgba(251,191,36,.35)}.badge.red{color:var(--red);border-color:rgba(251,113,133,.35)}.badge.gray{color:var(--muted)}.meta{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}.kv{background:rgba(15,23,42,.72);border:1px solid rgba(38,50,79,.7);border-radius:14px;padding:10px}.kv small{display:block;color:var(--muted);font-size:12px}.kv strong{display:block;margin-top:4px}.quota{margin:12px 0}.qrow{display:flex;justify-content:space-between;color:#cbd5e1;font-size:13px;margin-bottom:6px}.bar{height:10px;background:#111827;border-radius:999px;overflow:hidden;border:1px solid #26324f}.fill{height:100%;border-radius:999px;background:var(--green);width:0}.fill.warn{background:var(--yellow)}.fill.bad{background:var(--red)}.notes{color:#cbd5e1;background:rgba(15,23,42,.55);border-left:3px solid var(--blue);padding:10px;border-radius:10px;margin:12px 0;min-height:42px}.card-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.card-actions button{padding:8px 10px;font-size:13px}.empty{text-align:center;color:var(--muted);padding:50px;border:1px dashed var(--line);border-radius:22px;background:rgba(17,24,44,.5)}
+    dialog{border:1px solid var(--line);border-radius:22px;background:#0f172a;color:var(--text);box-shadow:var(--shadow);width:min(720px,calc(100vw - 26px));padding:0} dialog::backdrop{background:rgba(0,0,0,.62);backdrop-filter:blur(4px)}.modal-head{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}.modal-head h2{margin:0}.form{padding:18px 20px;display:grid;grid-template-columns:1fr 1fr;gap:12px}.field{display:flex;flex-direction:column;gap:7px}.field.full{grid-column:1/-1}.field label{color:#cbd5e1;font-size:13px}.field input,.field select,.field textarea{background:#090e1b;color:var(--text);border:1px solid var(--line);border-radius:12px;padding:11px;outline:none}.field textarea{min-height:82px;resize:vertical}.modal-actions{padding:16px 20px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px}.hint{color:var(--muted);font-size:12px;line-height:1.5}.footer{margin-top:28px;color:var(--muted);font-size:12px;text-align:center}.toast{position:fixed;right:18px;bottom:18px;background:#11182c;border:1px solid var(--line);box-shadow:var(--shadow);border-radius:14px;padding:12px 14px;display:none}.toast.show{display:block}
+    @media(max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}.grid{grid-template-columns:1fr}.top{flex-direction:column}.form{grid-template-columns:1fr}.toolbar input{min-width:0}.app{padding:18px}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="top">
+      <div class="brand">
+        <h1>AI Account Dashboard</h1>
+        <p>本地账号看板：额度手动记录、到期提醒、官方入口。不会读取 token，不会自动注册。</p>
+      </div>
+      <div class="actions">
+        <button class="ghost" id="exportBtn">导出备份</button>
+        <button class="ghost" id="importBtn">导入备份</button>
+        <button class="primary" id="addBtn">+ 新增账号</button>
+        <input id="importFile" type="file" accept="application/json" hidden />
+      </div>
+    </div>
+
+    <section class="stats">
+      <div class="stat"><div class="n" id="totalN">0</div><div class="l">账号总数</div></div>
+      <div class="stat"><div class="n" id="okN">0</div><div class="l">状态正常</div></div>
+      <div class="stat"><div class="n" id="soonN">0</div><div class="l">7 天内到期</div></div>
+      <div class="stat"><div class="n" id="lowN">0</div><div class="l">额度低于 30%</div></div>
+    </section>
+
+    <div class="toolbar">
+      <input id="search" placeholder="搜索邮箱 / 昵称 / 备注" />
+      <select id="statusFilter">
+        <option value="all">全部状态</option><option value="active">正常</option><option value="checking">待检查</option><option value="expired">已过期</option><option value="unknown">未知</option>
+      </select>
+      <select id="sortBy"><option value="updated">最近更新</option><option value="expires">到期时间</option><option value="daily">日额度从低到高</option><option value="weekly">周额度从低到高</option></select>
+    </div>
+
+    <main id="cards" class="grid"></main>
+    <div class="footer">数据只保存在当前浏览器 localStorage。重要数据请定期点「导出备份」。</div>
+  </div>
+
+  <dialog id="accountDialog">
+    <div class="modal-head"><h2 id="modalTitle">新增账号</h2><button class="ghost" onclick="closeDialog()">关闭</button></div>
+    <form id="accountForm">
+      <div class="form">
+        <input type="hidden" id="id" />
+        <div class="field"><label>工具</label><select id="tool"><option>Windsurf</option><option>Cursor</option><option>Claude</option><option>OpenAI</option><option>Gemini</option><option>其他</option></select></div>
+        <div class="field"><label>昵称</label><input id="nickname" placeholder="主力号 / 备用号" /></div>
+        <div class="field full"><label>邮箱</label><input id="email" type="email" placeholder="name@example.com" required /></div>
+        <div class="field"><label>套餐</label><select id="plan"><option>Unknown</option><option>Free</option><option>Trial</option><option>Pro</option><option>Team</option></select></div>
+        <div class="field"><label>状态</label><select id="status"><option value="active">正常</option><option value="checking">待检查</option><option value="expired">已过期</option><option value="unknown">未知</option></select></div>
+        <div class="field"><label>到期日期</label><input id="expiresAt" type="date" /></div>
+        <div class="field"><label>自动续费</label><select id="autoRenew"><option>未确认</option><option>已关闭</option><option>已开启</option><option>无</option></select></div>
+        <div class="field"><label>日额度已用 %</label><input id="dailyUsed" type="number" min="0" max="100" placeholder="例如 70" /></div>
+        <div class="field"><label>周额度已用 %</label><input id="weeklyUsed" type="number" min="0" max="100" placeholder="例如 45" /></div>
+        <div class="field"><label>日额度重置</label><input id="dailyReset" placeholder="例如 10h / 明天 8:00" /></div>
+        <div class="field"><label>周额度重置</label><input id="weeklyReset" placeholder="例如 3d 6h" /></div>
+        <div class="field full"><label>官方登录页</label><input id="loginUrl" placeholder="https://windsurf.com/profile" /></div>
+        <div class="field full"><label>订阅管理页</label><input id="manageUrl" placeholder="https://windsurf.com/subscription/manage-plan" /></div>
+        <div class="field full"><label>备注</label><textarea id="notes" placeholder="用途、项目、注意事项"></textarea></div>
+        <div class="field full hint">提示：这里只记录你手动输入的信息；不读取、不保存、不刷新任何登录 token。</div>
+      </div>
+      <div class="modal-actions"><button type="button" class="ghost" onclick="closeDialog()">取消</button><button class="primary" type="submit">保存</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast"></div>
+
+<script>
+const KEY='ai-account-dashboard-v1';
+let accounts=[];
+const $=id=>document.getElementById(id);
+function uid(){return 'acc_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,8)}
+function load(){try{accounts=JSON.parse(localStorage.getItem(KEY)||'[]')}catch{accounts=[]} if(!accounts.length){accounts=[sample()]; save();}}
+function save(){localStorage.setItem(KEY,JSON.stringify(accounts));}
+function sample(){return {id:uid(),tool:'Windsurf',nickname:'示例主力号',email:'yourname@gmail.com',plan:'Trial',status:'checking',expiresAt:'',autoRenew:'未确认',dailyUsed:35,weeklyUsed:20,dailyReset:'手动填写',weeklyReset:'手动填写',loginUrl:'https://windsurf.com/profile',manageUrl:'https://windsurf.com/subscription/manage-plan',notes:'示例账号。编辑或删除它，换成你自己的。',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}}
+function daysLeft(date){if(!date)return null; const today=new Date(); today.setHours(0,0,0,0); const d=new Date(date+'T00:00:00'); return Math.ceil((d-today)/86400000)}
+function pct(v){v=Number(v); return Number.isFinite(v)?Math.max(0,Math.min(100,v)):0}
+function remain(v){return 100-pct(v)}
+function badge(a){const d=daysLeft(a.expiresAt); if(a.status==='expired'||(d!==null&&d<0)) return ['已过期','red']; if(d!==null&&d<=7) return [`${d} 天到期`,'yellow']; if(a.status==='active') return ['正常','green']; if(a.status==='checking') return ['待检查','yellow']; return ['未知','gray'];}
+function qclass(v){const r=remain(v); return r<10?'bad':r<30?'warn':''}
+function render(){
+  const q=$('search').value.trim().toLowerCase(), sf=$('statusFilter').value, sort=$('sortBy').value;
+  let list=accounts.filter(a=>[a.email,a.nickname,a.notes,a.tool].join(' ').toLowerCase().includes(q));
+  if(sf!=='all') list=list.filter(a=>a.status===sf);
+  list.sort((a,b)=> sort==='expires' ? ((a.expiresAt||'9999')>(b.expiresAt||'9999')?1:-1) : sort==='daily' ? pct(a.dailyUsed)-pct(b.dailyUsed) : sort==='weekly' ? pct(a.weeklyUsed)-pct(b.weeklyUsed) : (b.updatedAt||'').localeCompare(a.updatedAt||''));
+  $('totalN').textContent=accounts.length;
+  $('okN').textContent=accounts.filter(a=>a.status==='active').length;
+  $('soonN').textContent=accounts.filter(a=>{const d=daysLeft(a.expiresAt); return d!==null&&d>=0&&d<=7}).length;
+  $('lowN').textContent=accounts.filter(a=>remain(a.dailyUsed)<30||remain(a.weeklyUsed)<30).length;
+  const box=$('cards');
+  if(!list.length){box.className=''; box.innerHTML='<div class="empty">没有匹配账号。点右上角「新增账号」。</div>'; return}
+  box.className='grid';
+  box.innerHTML=list.map(a=>{const [bt,bc]=badge(a); const d=daysLeft(a.expiresAt); const exp=a.expiresAt?(d<0?'已过期':`还有 ${d} 天`):'未填写'; return `
+    <article class="card">
+      <div class="card-head"><div><div class="name">${esc(a.nickname||a.tool||'账号')}</div><div class="email">${esc(a.email)}</div></div><span class="badge ${bc}">${bt}</span></div>
+      <div class="meta"><div class="kv"><small>套餐</small><strong>${esc(a.plan||'Unknown')}</strong></div><div class="kv"><small>到期</small><strong>${esc(exp)}</strong></div><div class="kv"><small>自动续费</small><strong>${esc(a.autoRenew||'未确认')}</strong></div><div class="kv"><small>工具</small><strong>${esc(a.tool||'Windsurf')}</strong></div></div>
+      ${quota('日额度',a.dailyUsed,a.dailyReset)}${quota('周额度',a.weeklyUsed,a.weeklyReset)}
+      <div class="notes">${esc(a.notes||'无备注')}</div>
+      <div class="card-actions"><button onclick="openUrl('${enc(a.loginUrl)}')">登录页</button><button onclick="openUrl('${enc(a.manageUrl)}')">订阅页</button><button onclick="editAcc('${a.id}')">编辑/更新额度</button><button class="danger" onclick="delAcc('${a.id}')">删除</button></div>
+    </article>`}).join('');
+}
+function quota(label,v,reset){const used=pct(v), r=100-used, cls=qclass(v); return `<div class="quota"><div class="qrow"><span>${label}：已用 ${used}% / 剩余 ${r}%</span><span>${esc(reset||'未填重置')}</span></div><div class="bar"><div class="fill ${cls}" style="width:${used}%"></div></div></div>`}
+function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function enc(s){return encodeURIComponent(s||'')}
+function openUrl(u){u=decodeURIComponent(u||''); if(!u){toast('还没填链接');return} window.open(u,'_blank','noopener')}
+function openDialog(){ $('modalTitle').textContent='新增账号'; $('accountForm').reset(); $('id').value=''; $('tool').value='Windsurf'; $('status').value='active'; $('plan').value='Unknown'; $('autoRenew').value='未确认'; $('loginUrl').value='https://windsurf.com/profile'; $('manageUrl').value='https://windsurf.com/subscription/manage-plan'; $('accountDialog').showModal();}
+function closeDialog(){ $('accountDialog').close();}
+function editAcc(id){const a=accounts.find(x=>x.id===id); if(!a)return; $('modalTitle').textContent='编辑账号'; ['id','tool','nickname','email','plan','status','expiresAt','autoRenew','dailyUsed','weeklyUsed','dailyReset','weeklyReset','loginUrl','manageUrl','notes'].forEach(k=>$(k).value=a[k]??''); $('accountDialog').showModal();}
+function delAcc(id){if(!confirm('确定删除这个账号？'))return; accounts=accounts.filter(a=>a.id!==id); save(); render(); toast('已删除')}
+$('accountForm').addEventListener('submit',e=>{e.preventDefault(); const id=$('id').value||uid(); const old=accounts.find(a=>a.id===id); const a={...(old||{}),id,tool:$('tool').value,nickname:$('nickname').value.trim(),email:$('email').value.trim(),plan:$('plan').value,status:$('status').value,expiresAt:$('expiresAt').value,autoRenew:$('autoRenew').value,dailyUsed:pct($('dailyUsed').value),weeklyUsed:pct($('weeklyUsed').value),dailyReset:$('dailyReset').value.trim(),weeklyReset:$('weeklyReset').value.trim(),loginUrl:$('loginUrl').value.trim(),manageUrl:$('manageUrl').value.trim(),notes:$('notes').value.trim(),createdAt:old?.createdAt||new Date().toISOString(),updatedAt:new Date().toISOString()}; if(old) accounts=accounts.map(x=>x.id===id?a:x); else accounts.unshift(a); save(); closeDialog(); render(); toast('已保存');});
+function toast(t){const el=$('toast'); el.textContent=t; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),2200)}
+$('addBtn').onclick=openDialog; $('search').oninput=render; $('statusFilter').onchange=render; $('sortBy').onchange=render;
+$('exportBtn').onclick=()=>{const blob=new Blob([JSON.stringify({version:1,exportedAt:new Date().toISOString(),accounts},null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='ai-account-dashboard-backup.json'; a.click(); URL.revokeObjectURL(a.href);};
+$('importBtn').onclick=()=>$('importFile').click(); $('importFile').onchange=async e=>{const f=e.target.files[0]; if(!f)return; try{const j=JSON.parse(await f.text()); const data=Array.isArray(j)?j:j.accounts; if(!Array.isArray(data)) throw new Error('bad'); accounts=data; save(); render(); toast('导入完成');}catch{alert('导入失败：不是有效备份 JSON')}};
+load(); render();
+</script>
+</body>
+</html>
