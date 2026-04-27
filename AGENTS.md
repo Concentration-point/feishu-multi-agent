@@ -169,6 +169,8 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 ### Image generation workflow
 
 - 任何生图、修图、图卡、海报、证件照、UI mockup、系列视觉任务，必须遵循 `IMAGE-GENERATION-SOP.md`；不是“知道有 SOP”，而是每次实际执行其闭环。
+- 在 Feishu 会话里，只要用户明确要求“生图 / 生成图片 / 绘制 / 图卡 / 海报 / 证件照 / 职业照 / 头像 / 形象分析图 / 检测生图链路”，必须调用 `image_generate`，不要空回复、不要只回 `Done.`、不要只写 prompt。
+- Feishu 生图默认模型固定写 `openai/gpt-image-2`；如果本轮或最近上下文有用户上传的图片路径，必须作为 reference image 传给 `image_generate`。
 - 学习外部生图 workflow / skill / 案例时，只吸收结构原则：意图翻译、任务拆解、prompt 编译、质量审查、案例复用；不得照搬未审计依赖或外部人设。
 - 高要求视觉任务默认执行 **Brief → Prompt → Generate → Critique → Regenerate if needed**。即使不把全过程长篇说给用户，也必须在内部完成 brief 与审查，不能只写长 prompt 就算执行。
 - 海报/图卡/UI 等带文字任务，默认优先生成“高级无字或少字主视觉 + 可后期叠加的准确文案”；除非用户明确要求图内文字，否则不要把大量中文交给生图模型硬排。
@@ -292,3 +294,17 @@ The goal: Be helpful without being annoying. Check in a few times a day, do usef
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
+
+### Skill Activation Contract — 真正用起来
+
+老大说“真正用起来”后，skill 不再只是库存表；匹配场景必须触发对应工作流。
+
+- **复杂 coding / 多文件修改 / 测试修复 / PR 评估**：默认交给 `coding-agent` 或对应项目 agent；除非只是单行小修。回报必须带验证证据。
+- **用户纠正、工具失败、重复犯错、发现更优流程**：必须使用 `self-improving-agent` 规则，写入 `.learnings/`，重要项提升到 `AGENTS.md` / `TOOLS.md` / `MEMORY.md`。
+- **人物 / 项目 / 任务 / 文档之间有长期关系**：优先考虑 `ontology`，不要只写散文式记忆；若不用，要有明确理由（一次性信息、无需结构化）。
+- **动态网页、需要截图、真实浏览器状态、页面交互**：优先用 `Agent-Browser` / 浏览器链路；不要只停在纯文本抓取。
+- **时效性强、需要交叉验证、攻略/教程/热榜/配置方法**：优先按检索 SOP 调用多源检索能力（含 `Multi-Search-Engine` 思路），至少原始来源 + 第二来源。
+- **PDF / DOCX / PPTX / XLSX 等文件摄入**：优先考虑 `markitdown` 或对应文件分析工具，把材料转成可引用文本再判断。
+- **新增 skill 相关**：仍必须先查 `memory/skills-inventory.md`，先排除已学/已装/已配置项，再提风险，不得擅自安装或启用。
+
+执行口径：能做就直接做；高风险先确认；如果某个匹配 skill 没用，最终回复里要简短说明为什么没用，避免“学了但没理解”。

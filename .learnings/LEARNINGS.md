@@ -214,3 +214,31 @@
 - **Resolved**: pending
 - **Commit/PR**: pending
 - **Notes**: 需将图像生成工作流沉淀到 AGENTS.md 或专门 SOP。
+
+## [LRN-20260428-001] correction
+
+**Logged**: 2026-04-28T00:35:32+08:00
+**Priority**: high
+**Status**: promoted
+**Area**: workflow
+
+### Summary
+老大要求把已学 skill “真正用起来”，不是停留在会背清单和事后评价。
+
+### Details
+盘点发现：生图、飞书回复、项目 agent 路由等已经贯彻；但 coding-agent、self-improving-agent、ontology、Agent-Browser、Multi-Search-Engine 等存在“知道但触发不稳定”的问题。后续必须把这些变成条件反射：遇到匹配场景先触发对应工作流，而不是只靠临场想起。
+
+### Suggested Action
+在 AGENTS.md 增加 Skill Activation Contract；在 skills-inventory.md 增加日常贯彻矩阵，明确触发条件、必须动作、回报口径和例外。以后复杂 coding 默认转项目/coding agent；失败/纠错必须记 learning；结构化长期关系用 ontology；动态网页/截图用 Agent-Browser；高时效/多源核验用 Multi-Search-Engine。
+
+### Metadata
+- Source: user_feedback
+- Related Files: AGENTS.md, memory/skills-inventory.md, .learnings/LEARNINGS.md
+- Tags: skills, workflow, activation, self-improvement
+- Pattern-Key: skills.must-be-operationalized
+
+### Resolution
+- **Resolved**: 2026-04-28T00:35:32+08:00
+- **Commit/PR**: pending
+- **Notes**: 已提升为 AGENTS.md 和 skills-inventory.md 的执行规则。
+---
