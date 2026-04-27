@@ -270,3 +270,36 @@
 - **Commit/PR**: pending
 - **Notes**: 已记录，待提升到检索 SOP / AGENTS。
 ---
+
+## [LRN-20260428-003] correction
+
+**Logged**: 2026-04-28T01:51:44+08:00
+**Priority**: high
+**Status**: promoted
+**Area**: image-generation
+
+### Summary
+当用户已经给出明确生图 prompt 时，不能擅自“重写成我喜欢的 prompt”导致需求漂移；应保留用户原始意图和关键约束，再做结构化增强。
+
+### Details
+用户指出：目前有生图 prompt 时，我再次生成的 prompt 并不能满足需求。问题在于我会把用户 prompt 过度翻译、合并、泛化，导致原本的细节、排序、风格词、禁区和判断重点被稀释。高要求生图应以用户 prompt 为源文本，先抽取不可丢失约束，再分层增强，而不是重写。
+
+### Suggested Action
+在 IMAGE-GENERATION-SOP 中加入 Prompt Fidelity Protocol：
+1. 先保留用户原始 prompt 的核心措辞和所有硬约束。
+2. 区分“不可改硬约束 / 可增强软风格 / 需要澄清冲突”。
+3. 生成 prompt 时使用“原意保真 + 结构化补强”，不得删掉用户指定字段。
+4. 如果用户 prompt 已足够明确，少改，只补模型执行需要的质量、构图、负面限制。
+5. 需要再次生成时，应基于上一版失败点定向修，不是完全另写一个 prompt。
+
+### Metadata
+- Source: user_feedback
+- Related Files: IMAGE-GENERATION-SOP.md, .learnings/LEARNINGS.md
+- Tags: image-generation, prompt-fidelity, user-intent, correction
+- Pattern-Key: image.prompt.fidelity
+
+### Resolution
+- **Resolved**: 2026-04-28T01:51:44+08:00
+- **Commit/PR**: pending
+- **Notes**: 已记录，待提升到 IMAGE-GENERATION-SOP。
+---
