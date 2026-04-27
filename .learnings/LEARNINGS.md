@@ -303,3 +303,36 @@
 - **Commit/PR**: pending
 - **Notes**: 已记录，待提升到 IMAGE-GENERATION-SOP。
 ---
+
+## [LRN-20260428-004] best_practice
+
+**Logged**: 2026-04-28T02:11:43+08:00
+**Priority**: high
+**Status**: promoted
+**Area**: image-generation
+
+### Summary
+绘图流程必须按 prompt 完整度分档：原 prompt 直出、轻量增强、重构优化。默认目标是命中用户原意，而不是生成“更专业但跑偏”的 prompt。
+
+### Details
+用户指出：很多情况下原 prompt 直接生成效果更好；采用流程的本意是效果更好，而不是把 prompt 磨平。现有流程容易把强风格、情绪和明确要求改成模板化高级感。需要将 Raw Prompt Mode / Minimal Compile Mode / Design Rewrite Mode 写入 SOP，并要求生成前判断模式。
+
+### Suggested Action
+更新 IMAGE-GENERATION-SOP：
+- 原 prompt 完整度 >=80%：Raw Prompt Mode，尽量原文直出，只加模型必要参数/参考图约束。
+- 完整度 50%-80%：Minimal Compile Mode，只补少量执行信息，不重排审美。
+- 完整度 <50% 或复杂图卡/冲突需求：Design Rewrite Mode，才允许完整 brief 与重构。
+- 对强 prompt 可做 A/B：原文直出版 + 轻量增强版。
+- 生成前做 prompt mutation lint：检查是否删词、换风格、加结论、改重点。
+
+### Metadata
+- Source: user_feedback
+- Related Files: IMAGE-GENERATION-SOP.md, .learnings/LEARNINGS.md
+- Tags: image-generation, prompt-fidelity, raw-prompt, workflow
+- Pattern-Key: image.prompt.mode.routing
+
+### Resolution
+- **Resolved**: 2026-04-28T02:11:43+08:00
+- **Commit/PR**: pending
+- **Notes**: 已提升到 IMAGE-GENERATION-SOP 并添加 smoke test。
+---
