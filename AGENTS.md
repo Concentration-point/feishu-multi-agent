@@ -308,3 +308,12 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 - **新增 skill 相关**：仍必须先查 `memory/skills-inventory.md`，先排除已学/已装/已配置项，再提风险，不得擅自安装或启用。
 
 执行口径：能做就直接做；高风险先确认；如果某个匹配 skill 没用，最终回复里要简短说明为什么没用，避免“学了但没理解”。
+
+
+### Feishu Formatting Contract
+
+- 飞书默认回复统一走“卡片感短格式”：不用 Markdown 大标题（不要 `#` / `##`），少用多级列表。
+- 分块用短行加粗标签，例如 `**结论**`、`**下一步**`，正文保持同一字号。
+- 长内容也按一层列表展开，避免标题、引用、代码块混用导致飞书字号忽大忽小。
+- 代码/commit/命令可以用短代码块；普通解释不要堆复杂 Markdown。
+- 目标视觉：参考已确认的飞书 card 样式——字号稳定、信息块清楚、少废话。
