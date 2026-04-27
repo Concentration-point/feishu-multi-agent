@@ -1,4 +1,4 @@
-# AGENTS.md - Your Workspace
+﻿# AGENTS.md - Your Workspace
 
 This folder is home. Treat it that way.
 
@@ -166,6 +166,12 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 - 热榜原榜抓不到时，允许降级为“搜索恢复版”或“人话替代版”，但必须明确标注，不准伪装成原榜。
 - 对晨报热榜链，优先复用已验证过的历史有效入口：知乎优先官方热榜页，微博在官方链未证实稳定前可先走已验证的聚合页，再做官方补测。
 
+
+### Retrieval Escalation Rule — 不等用户提醒
+
+- 当 `web_fetch` / `summarize` / requests 出现 blocked、captcha、empty page、JS 渲染缺正文、只拿到标题或正文明显不全时，必须自动升级到真实浏览器/渲染页面链路（Agent-Browser / canvas / 浏览器截图），不要等老大说“走真实网页”。
+- 真实浏览器仍遇到验证码或登录墙时，再明确说明卡点，并请求截图、PDF、正文或授权后的页面内容。
+- 回复中要区分：已读到正文 / 只读到标题 / 被验证码拦截 / 已用浏览器验证。
 ### Image generation workflow
 
 - 任何生图、修图、图卡、海报、证件照、UI mockup、系列视觉任务，必须遵循 `IMAGE-GENERATION-SOP.md`；不是“知道有 SOP”，而是每次实际执行其闭环。
@@ -317,3 +323,4 @@ This is a starting point. Add your own conventions, style, and rules as you figu
 - 长内容也按一层列表展开，避免标题、引用、代码块混用导致飞书字号忽大忽小。
 - 代码/commit/命令可以用短代码块；普通解释不要堆复杂 Markdown。
 - 目标视觉：参考已确认的飞书 card 样式——字号稳定、信息块清楚、少废话。
+

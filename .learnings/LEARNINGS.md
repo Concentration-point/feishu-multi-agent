@@ -242,3 +242,31 @@
 - **Commit/PR**: pending
 - **Notes**: 已提升为 AGENTS.md 和 skills-inventory.md 的执行规则。
 ---
+
+## [LRN-20260428-002] correction
+
+**Logged**: 2026-04-28T01:11:03+08:00
+**Priority**: high
+**Status**: promoted
+**Area**: retrieval
+
+### Summary
+网页抓取/摘要链路走不通时，不能等用户提醒“走真实网页”；必须自动切到真实浏览器/页面渲染链路。
+
+### Details
+用户指出：我在微信文章抓取失败后，仍需要用户提醒“走真实网页”才切 Agent-Browser。这说明 Retrieval SOP 和 Agent-Browser 的触发还没有形成条件反射。正确行为是：web_fetch/summarize/requests 被拦、验证码、空页面、正文缺失时，主动切到真实浏览器链路，并说明卡点和证据；若浏览器仍卡验证码，再请求用户提供截图/PDF/正文。
+
+### Suggested Action
+提升为硬规则：信息检索遇到 blocked/captcha/empty page/JS 渲染/正文缺失，自动按顺序切换：web_fetch → summarize/requests → Agent-Browser 真实页面 → 截图/PDF/用户提供正文；不再反问用户要不要走浏览器。
+
+### Metadata
+- Source: user_feedback
+- Related Files: AGENTS.md, RETRIEVAL-SOP.md, .learnings/LEARNINGS.md
+- Tags: retrieval, browser, agent-browser, fallback, user-correction
+- Pattern-Key: retrieval.auto.escalate.real-browser
+
+### Resolution
+- **Resolved**: 2026-04-28T01:11:03+08:00
+- **Commit/PR**: pending
+- **Notes**: 已记录，待提升到检索 SOP / AGENTS。
+---
