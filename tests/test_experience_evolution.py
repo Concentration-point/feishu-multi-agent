@@ -233,37 +233,31 @@ class TestSettleExperienceEvents:
         o.stage_results = [FakeResult(ok=True, role_id="account_manager")]
         pending = [self._make_pending("account_manager")]
 
-        # 模拟 3 条已有经验，触发合并
-        fake_existing = [
-            {"fields": {"置信度": 0.75}, "record_id": f"rec{i}"} for i in range(3)
-        ]
-        merged_card = {
-            "situation": "合并后场景",
-            "action": "合并后行动",
-            "outcome": "合并后结果",
-            "lesson": "合并后的精炼经验",
-            "category": "电商大促",
-            "applicable_roles": ["account_manager"],
-            "_merged_confidence": 0.85,
-        }
-
         with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
             with patch("orchestrator.ExperienceManager") as MockEM:
                 em = MockEM.return_value
-                em.check_dedup = AsyncMock(return_value=fake_existing)
-                em.merge_experiences = AsyncMock(return_value=merged_card)
                 em.save_experience = AsyncMock(return_value="recEXPMerged")
                 em.save_to_wiki = AsyncMock(return_value="wiki/merged.md")
+                em.optimize_bucket = AsyncMock(return_value={
+                    "role_id": "account_manager",
+                    "category": "电商大促",
+                    "before": 4,
+                    "after_dedup": 4,
+                    "duplicate_pairs": 0,
+                    "dedup_deleted": 0,
+                    "merged_deleted": 4,
+                    "merged_created": 1,
+                })
                 await o._settle_experiences(pending, "测试项目", 0.8)
 
         events = bus.get_history("recTEST001")
         merging = [e for e in events if e["event_type"] == "experience.merging"]
         merged = [e for e in events if e["event_type"] == "experience.merged"]
         assert len(merging) == 1
-        assert merging[0]["payload"]["existing_count"] == 3
+        assert merging[0]["payload"]["existing_count"] == 4
         assert len(merged) == 1
-        assert merged[0]["payload"]["merged_from"] == 3
-        assert merged[0]["payload"]["new_confidence"] == 0.85
+        assert merged[0]["payload"]["merged_from"] == 4
+        assert merged[0]["payload"]["new_count"] == 1
 
     @pytest.mark.asyncio
     async def test_empty_pending_no_events(self, orch):

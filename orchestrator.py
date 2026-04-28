@@ -10,7 +10,6 @@ from agents.base import BaseAgent
 from config import (
     DELIVERY_DOC_ENABLED,
     EXPERIENCE_CONFIDENCE_THRESHOLD,
-    EXPERIENCE_MAX_PER_CATEGORY,
     FEISHU_CHAT_ID,
     HUMAN_REVIEW_TIMEOUT,
     LLM_API_KEY,
@@ -236,6 +235,21 @@ class Orchestrator:
             # ── 文案完成后兜底：扫 draft 为空的行，单次 LLM 补写 ──
             if role_id == "copywriter" and result.ok:
                 await self._ensure_copywriter_drafts(project_name)
+                # fan-out 模式下子 Agent 不推进全局状态，Orchestrator 兜底：
+                # 确认全部成稿后主动推进到「审核中」（用当前已知状态判断，避免额外读一次）
+                if current_status == "撰写中":
+                    try:
+                        cm = ContentMemory()
+                        rows = await cm.list_by_project(project_name)
+                        empty_rows = [r for r in rows if not (r.draft or "").strip()]
+                        if rows and not empty_rows:
+                            print(
+                                f"[Orchestrator] 文案兜底：{len(rows)} 条全部成稿，"
+                                f"主动推进状态「撰写中」→「审核中」"
+                            )
+                            await self._pm.update_status("审核中")
+                    except Exception as exc:
+                        print(f"[Orchestrator] 警告: 文案状态推进失败: {exc}")
 
             # ── 审核完成后处理返工逻辑 ──
             if role_id == "reviewer":
@@ -425,9 +439,15 @@ class Orchestrator:
 
         sub_agents: dict[str, BaseAgent] = {k: _make_agent(k) for k in group_names}
 
-        # 3. 并行执行 (return_exceptions 保证失败组不阻断其他)
+        # 3. 并行执行，Semaphore 限制最多 5 个同时跑，其余等待
+        _sem = asyncio.Semaphore(5)
+
+        async def _run_with_sem(platform: str):
+            async with _sem:
+                return await sub_agents[platform].run()
+
         parallel_start = time.perf_counter()
-        tasks = [sub_agents[k].run() for k in group_names]
+        tasks = [_run_with_sem(k) for k in group_names]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         parallel_duration = time.perf_counter() - parallel_start
         print(f"[Orchestrator] fan-out 并行执行完成, 耗时 {parallel_duration:.2f}s")
@@ -532,7 +552,11 @@ class Orchestrator:
             print(f"[Orchestrator] 警告: 审核结构化红线字段命中风险：{self._review_red_flag}，触发一票否决")
 
         if pass_rate >= self._review_threshold and not has_red_flag:
-            print(f"[Orchestrator] 审核通过率 {pass_rate:.0%}，达到阈值 {self._review_threshold:.0%}，且无红线风险，继续进入下一阶段")
+            print(f"[Orchestrator] 审核通过率 {pass_rate:.0%}，达到阈值 {self._review_threshold:.0%}，且无红线风险，推进状态「审核中」→「排期中」")
+            try:
+                await self._pm.update_status("排期中")
+            except Exception as exc:
+                print(f"[Orchestrator] 警告: 审核通过后状态推进失败: {exc}")
             return
 
         # 已达最大重试次数，强制推进到排期阶段，避免死循环
@@ -1213,28 +1237,6 @@ class Orchestrator:
                 card["source_run"] = self.record_id
                 card["source_stage"] = role_id
                 card["review_status"] = await self._get_project_review_status()
-                existing = await em.check_dedup(role_id, category, lesson=lesson)
-                if existing and lesson:
-                    logger.info("[经验沉淀] %s/%s 命中去重候选 %d 条", role_id, category, len(existing))
-
-                if len(existing) >= EXPERIENCE_MAX_PER_CATEGORY:
-                    self._publish("experience.merging", {
-                        "role_id": role_id,
-                        "category": category,
-                        "existing_count": len(existing),
-                    }, agent_role=role_id)
-                    merged = await em.merge_experiences(existing, card)
-                    if merged:
-                        card = merged
-                        confidence = merged.get("_merged_confidence", confidence)
-                        merged_count += 1
-                        self._publish("experience.merged", {
-                            "role_id": role_id,
-                            "category": category,
-                            "merged_from": len(existing),
-                            "new_confidence": confidence,
-                        }, agent_role=role_id)
-
                 saved = await em.save_experience(card, confidence, project_name)
                 # Agent 未自主写入 wiki 时，Orchestrator 兜底写入
                 wiki_saved = None
@@ -1250,6 +1252,41 @@ class Orchestrator:
                         "bitable_saved": bool(saved),
                         "wiki_saved": bool(wiki_saved),
                     }, agent_role=role_id)
+
+                    optimize_roles = card.get("applicable_roles") or [role_id]
+                    seen_roles: set[str] = set()
+                    for optimize_role in optimize_roles:
+                        optimize_role = str(optimize_role or role_id)
+                        if optimize_role in seen_roles:
+                            continue
+                        seen_roles.add(optimize_role)
+                        optimize_call = em.optimize_bucket(
+                            optimize_role, category, project_name=project_name
+                        )
+                        optimize_summary = {}
+                        if hasattr(optimize_call, "__await__"):
+                            optimize_summary = await optimize_call
+                        if optimize_summary:
+                            if optimize_summary.get("merged_created", 0) > 0:
+                                merged_count += 1
+                                self._publish("experience.merging", {
+                                    "role_id": optimize_role,
+                                    "category": category,
+                                    "existing_count": optimize_summary.get("after_dedup", 0),
+                                }, agent_role=optimize_role)
+                                self._publish("experience.merged", {
+                                    "role_id": optimize_role,
+                                    "category": category,
+                                    "merged_from": optimize_summary.get("merged_deleted", 0),
+                                    "new_count": optimize_summary.get("merged_created", 0),
+                                }, agent_role=optimize_role)
+                            if (
+                                optimize_summary.get("dedup_deleted", 0) > 0
+                                or optimize_summary.get("merged_created", 0) > 0
+                            ):
+                                self._publish("experience.optimized", {
+                                    **optimize_summary,
+                                }, agent_role=optimize_role)
                 else:
                     logger.info("[经验沉淀] %s 被质量门槛或去重策略拦截，未落盘", role_id)
             except Exception as exc:

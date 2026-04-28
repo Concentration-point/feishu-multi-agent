@@ -85,11 +85,12 @@ _REVIEWER_REFLECT_PROMPT = (
     '  "outcome": "审核通过率和整体结果",\n'
     '  "lesson": "下次文案在撰写这类内容前必须预先检查什么",\n'
     '  "category": "电商大促|新品发布|品牌传播|日常运营",\n'
-    '  "applicable_roles": ["reviewer", "copywriter"]\n'
+    '  "applicable_roles": ["reviewer", "copywriter"]  // 必须保持此固定值，不要修改\n'
     "}\n\n"
     "要求：\n"
     "- lesson 必须具体到可执行检查项，不要空泛\n"
     "- violations_found 必须尽量落到具体违规模式\n"
+    "- applicable_roles 固定为 [\"reviewer\", \"copywriter\"]，不允许输出其他值\n"
     "- 只输出 JSON，不要其他文字"
 )
 
