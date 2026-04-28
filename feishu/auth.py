@@ -1,5 +1,6 @@
 """tenant_access_token 管理 — 单例 + 自动刷新"""
 
+import asyncio
 import time
 import logging
 import httpx
@@ -35,26 +36,47 @@ class TokenManager:
         return self._token
 
     async def _refresh(self) -> None:
-        """向飞书请求新的 tenant_access_token。"""
+        """向飞书请求新的 tenant_access_token，网络抖动时最多重试 3 次（指数退避）。
+
+        - 业务错误（code != 0，如 app_id 错误）不重试，直接抛 FeishuAuthError。
+        - 网络/超时/5xx 错误重试，间隔 1s → 2s → 4s。
+        """
         payload = {
             "app_id": FEISHU_APP_ID,
             "app_secret": FEISHU_APP_SECRET,
         }
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(TOKEN_URL, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
+        last_exc: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+                    resp = await client.post(TOKEN_URL, json=payload)
+                    resp.raise_for_status()
+                    data = resp.json()
 
-        if data.get("code") != 0:
-            raise FeishuAuthError(
-                f"获取 token 失败: code={data.get('code')}, msg={data.get('msg')}"
-            )
+                if data.get("code") != 0:
+                    raise FeishuAuthError(
+                        f"获取 token 失败: code={data.get('code')}, msg={data.get('msg')}"
+                    )
 
-        self._token = data["tenant_access_token"]
-        expire_in = data.get("expire", 7200)
-        # 提前 60s 刷新，避免边界过期
-        self._expire_at = time.time() + expire_in - 60
-        logger.info("tenant_access_token 已刷新，有效期 %ds", expire_in)
+                self._token = data["tenant_access_token"]
+                expire_in = data.get("expire", 7200)
+                # 提前 60s 刷新，避免边界过期
+                self._expire_at = time.time() + expire_in - 60
+                logger.info("tenant_access_token 已刷新，有效期 %ds", expire_in)
+                return
+
+            except FeishuAuthError:
+                raise  # 业务错误不重试
+            except Exception as exc:
+                last_exc = exc
+                if attempt < 3:
+                    wait = 2 ** (attempt - 1)  # 1s, 2s
+                    logger.warning(
+                        "token 刷新失败（第%d次），%.0fs 后重试: %s", attempt, wait, exc
+                    )
+                    await asyncio.sleep(wait)
+
+        raise FeishuAuthError(f"token 刷新失败（已重试3次）: {last_exc}")
 
 
 class FeishuAuthError(Exception):

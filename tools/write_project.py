@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from feishu.bitable import FeishuAPIError
 from memory.project import ProjectMemory
 from tools import AgentContext
 
@@ -69,72 +70,76 @@ async def execute(params: dict, context: AgentContext) -> str:
     if not field_name or not content:
         return "错误: field_name 和 content 不能为空"
 
-    pm = ProjectMemory(context.record_id)
+    try:
+        pm = ProjectMemory(context.record_id)
 
-    if field_name == "review_summary":
-        proj = await pm.load()
-        parsed_pass_rate = _parse_pass_rate(content)
-        pass_rate = (
-            parsed_pass_rate
-            if parsed_pass_rate is not None
-            else float(proj.review_pass_rate or 0.0)
-        )
-        await pm.write_review_summary(
-            content,
-            pass_rate,
-            threshold=float(getattr(proj, "review_threshold", 0.0) or 0.0),
-            red_flag=getattr(proj, "review_red_flag", "") or "",
-        )
-        return (
-            f"已写入 review_summary（{len(content)} 字），"
-            f"review_pass_rate={pass_rate:.0%}"
-        )
+        if field_name == "review_summary":
+            proj = await pm.load()
+            parsed_pass_rate = _parse_pass_rate(content)
+            pass_rate = (
+                parsed_pass_rate
+                if parsed_pass_rate is not None
+                else float(proj.review_pass_rate or 0.0)
+            )
+            await pm.write_review_summary(
+                content,
+                pass_rate,
+                threshold=float(getattr(proj, "review_threshold", 0.0) or 0.0),
+                red_flag=getattr(proj, "review_red_flag", "") or "",
+            )
+            return (
+                f"已写入 review_summary（{len(content)} 字），"
+                f"review_pass_rate={pass_rate:.0%}"
+            )
 
-    if field_name == "review_pass_rate":
-        parsed_pass_rate = _parse_pass_rate(content)
-        if parsed_pass_rate is None:
-            return "错误: review_pass_rate 无法解析，请使用 0.75 或 75% 这类格式"
+        if field_name == "review_pass_rate":
+            parsed_pass_rate = _parse_pass_rate(content)
+            if parsed_pass_rate is None:
+                return "错误: review_pass_rate 无法解析，请使用 0.75 或 75% 这类格式"
 
-        proj = await pm.load()
-        await pm.write_review_summary(
-            proj.review_summary,
-            parsed_pass_rate,
-            threshold=float(getattr(proj, "review_threshold", 0.0) or 0.0),
-            red_flag=getattr(proj, "review_red_flag", "") or "",
-        )
-        return f"已写入 review_pass_rate（{parsed_pass_rate:.0%}）"
+            proj = await pm.load()
+            await pm.write_review_summary(
+                proj.review_summary,
+                parsed_pass_rate,
+                threshold=float(getattr(proj, "review_threshold", 0.0) or 0.0),
+                red_flag=getattr(proj, "review_red_flag", "") or "",
+            )
+            return f"已写入 review_pass_rate（{parsed_pass_rate:.0%}）"
 
-    if field_name == "review_threshold":
-        parsed = _parse_pass_rate(content)
-        if parsed is None:
-            return "错误: review_threshold 无法解析，请使用 0.6 或 60% 这类格式"
-        proj = await pm.load()
-        await pm.write_review_summary(
-            proj.review_summary,
-            float(proj.review_pass_rate or 0.0),
-            threshold=parsed,
-            red_flag=getattr(proj, "review_red_flag", "") or "",
-        )
-        return f"已写入 review_threshold（{parsed:.0%}）"
+        if field_name == "review_threshold":
+            parsed = _parse_pass_rate(content)
+            if parsed is None:
+                return "错误: review_threshold 无法解析，请使用 0.6 或 60% 这类格式"
+            proj = await pm.load()
+            await pm.write_review_summary(
+                proj.review_summary,
+                float(proj.review_pass_rate or 0.0),
+                threshold=parsed,
+                red_flag=getattr(proj, "review_red_flag", "") or "",
+            )
+            return f"已写入 review_threshold（{parsed:.0%}）"
 
-    if field_name == "review_red_flag":
-        proj = await pm.load()
-        await pm.write_review_summary(
-            proj.review_summary,
-            float(proj.review_pass_rate or 0.0),
-            threshold=float(getattr(proj, "review_threshold", 0.0) or 0.0),
-            red_flag=content.strip(),
-        )
-        return f"已写入 review_red_flag（{content.strip() or '无'}）"
+        if field_name == "review_red_flag":
+            proj = await pm.load()
+            await pm.write_review_summary(
+                proj.review_summary,
+                float(proj.review_pass_rate or 0.0),
+                threshold=float(getattr(proj, "review_threshold", 0.0) or 0.0),
+                red_flag=content.strip(),
+            )
+            return f"已写入 review_red_flag（{content.strip() or '无'}）"
 
-    if field_name == "knowledge_ref":
-        refs = [r.strip() for r in content.split("\n") if r.strip()]
-        await pm.write_knowledge_ref(refs)
-        return f"已写入 knowledge_ref（{len(refs)} 条引用）"
+        if field_name == "knowledge_ref":
+            refs = [r.strip() for r in content.split("\n") if r.strip()]
+            await pm.write_knowledge_ref(refs)
+            return f"已写入 knowledge_ref（{len(refs)} 条引用）"
 
-    writer_method = _WRITERS.get(field_name)
-    if not writer_method:
-        return f"错误: 不支持写入字段 '{field_name}'"
+        writer_method = _WRITERS.get(field_name)
+        if not writer_method:
+            return f"错误: 不支持写入字段 '{field_name}'"
 
-    await getattr(pm, writer_method)(content)
-    return f"已写入 {field_name}（{len(content)} 字）"
+        await getattr(pm, writer_method)(content)
+        return f"已写入 {field_name}（{len(content)} 字）"
+
+    except FeishuAPIError as exc:
+        return f"飞书API错误（code={exc.code}）: {exc.msg}"

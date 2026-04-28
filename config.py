@@ -79,7 +79,9 @@ LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
 LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
 LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o")
 LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
-LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
+LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))       # SDK 层内置重试数（极短抖动）
+LLM_APP_MAX_RETRIES: int = int(os.getenv("LLM_APP_MAX_RETRIES", "3"))  # 应用层指数退避重试数
+MAX_ROUTE_STEPS: int = int(os.getenv("MAX_ROUTE_STEPS", "15"))  # 防路由死循环安全上限
 
 # ── L0 工作记忆（对话窗口保护）──
 # max: 对话总 token 上限（按 estimate_tokens 估算）
@@ -121,6 +123,7 @@ FIELD_MAP_PROJECT = {
     "review_status": "人审状态",
     "pending_meta": "人审元数据",
     "human_feedback": "人类修改意见",
+    "agent_error_log": "Agent异常日志",  # 记录 Agent 执行失败信息，便于运营侧感知
 }
 
 # ── 内容排期表字段映射 ──

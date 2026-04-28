@@ -216,6 +216,12 @@ class ProjectMemory:
         """写人类修改意见原话。"""
         await self._safe_update("human_feedback", feedback)
 
+    async def write_agent_error_log(self, message: str) -> None:
+        """写入 Agent 执行失败日志，供运营侧从 Bitable 感知异常。
+        使用 _safe_update：飞书列未建时静默跳过，不影响主流程。
+        """
+        await self._safe_update("agent_error_log", message)
+
     async def clear_pending_state(self) -> None:
         """放行或重置时清空三个门禁字段，避免脏数据误导下次恢复。"""
         await self._safe_update("pending_meta", "")

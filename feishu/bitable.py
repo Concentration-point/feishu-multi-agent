@@ -2,12 +2,13 @@
 
 Copywriter fan-out 场景下多个子 Agent 会并行读写 Bitable，为避免飞书 API 的
 QPS 限流，模块级提供一个 asyncio.Semaphore 做全局并发闸门，所有 httpx 请求
-在 _get_bitable_sem() 守护下执行。语义：同时在途的 Bitable 请求数 <=
+在 _bitable_client() 守护下执行。语义：同时在途的 Bitable 请求数 <=
 BITABLE_CONCURRENCY_LIMIT（默认 5）。
 """
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
@@ -21,6 +22,8 @@ logger = logging.getLogger(__name__)
 # asyncio.Semaphore 必须在有 running event loop 时创建，懒初始化避免
 # import-time 绑定到错误 loop（测试里常为每个 case 新起 loop）。
 BITABLE_CONCURRENCY_LIMIT = 5
+BITABLE_HTTP_TIMEOUT = 30.0   # 单次 HTTP 请求超时（秒）
+BITABLE_SEM_TIMEOUT = 60.0    # 等待并发槽超时（秒），防止进程级挂死
 _BITABLE_SEMAPHORE: asyncio.Semaphore | None = None
 
 
@@ -46,6 +49,26 @@ def _reset_bitable_sem_for_test(limit: int | None = None) -> asyncio.Semaphore:
         BITABLE_CONCURRENCY_LIMIT if limit is None else limit
     )
     return _BITABLE_SEMAPHORE
+
+
+@asynccontextmanager
+async def _bitable_client():
+    """获取并发槽 + 带超时的 httpx client，统一解决两个 P0 问题：
+    1. Semaphore 等待超过 BITABLE_SEM_TIMEOUT 时抛 FeishuAPIError，防进程挂死。
+    2. httpx.AsyncClient 设置 BITABLE_HTTP_TIMEOUT，防单次请求永久阻塞。
+    """
+    try:
+        async with asyncio.timeout(BITABLE_SEM_TIMEOUT):
+            async with _get_bitable_sem():
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(BITABLE_HTTP_TIMEOUT)
+                ) as client:
+                    yield client
+    except asyncio.TimeoutError:
+        raise FeishuAPIError(
+            -1,
+            f"Bitable 并发槽等待超时（>{BITABLE_SEM_TIMEOUT:.0f}s），飞书 API 可能拥塞",
+        )
 
 
 class FeishuAPIError(Exception):
@@ -128,9 +151,8 @@ class BitableClient:
         """读取单条记录，返回 fields 字典（富文本已转纯字符串）。"""
         url = f"{self._table_url(table_id)}/{record_id}"
         headers = await self._headers()
-        async with _get_bitable_sem():
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(url, headers=headers)
+        async with _bitable_client() as client:
+            resp = await client.get(url, headers=headers)
 
         data = self._parse_resp(resp)
         fields = data["data"]["record"]["fields"]
@@ -156,9 +178,8 @@ class BitableClient:
             if page_token:
                 params["page_token"] = page_token
 
-            async with _get_bitable_sem():
-                async with httpx.AsyncClient() as client:
-                    resp = await client.get(url, headers=headers, params=params)
+            async with _bitable_client() as client:
+                resp = await client.get(url, headers=headers, params=params)
 
             data = self._parse_resp(resp)
             items = data.get("data", {}).get("items") or []
@@ -189,9 +210,8 @@ class BitableClient:
         headers = await self._headers()
         payload = {"fields": fields}
 
-        async with _get_bitable_sem():
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(url, headers=headers, json=payload)
+        async with _bitable_client() as client:
+            resp = await client.post(url, headers=headers, json=payload)
 
         data = self._parse_resp(resp)
         record_id = data["data"]["record"]["record_id"]
@@ -206,9 +226,8 @@ class BitableClient:
         headers = await self._headers()
         payload = {"records": [{"fields": r} for r in records]}
 
-        async with _get_bitable_sem():
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(url, headers=headers, json=payload)
+        async with _bitable_client() as client:
+            resp = await client.post(url, headers=headers, json=payload)
 
         data = self._parse_resp(resp)
         created = data["data"]["records"]
@@ -226,9 +245,8 @@ class BitableClient:
         headers = await self._headers()
         payload = {"fields": fields}
 
-        async with _get_bitable_sem():
-            async with httpx.AsyncClient() as client:
-                resp = await client.put(url, headers=headers, json=payload)
+        async with _bitable_client() as client:
+            resp = await client.put(url, headers=headers, json=payload)
 
         data = self._parse_resp(resp)
         logger.info(
@@ -240,9 +258,8 @@ class BitableClient:
         url = f"{self._table_url(table_id)}/{record_id}"
         headers = await self._headers()
 
-        async with _get_bitable_sem():
-            async with httpx.AsyncClient() as client:
-                resp = await client.request("DELETE", url, headers=headers)
+        async with _bitable_client() as client:
+            resp = await client.request("DELETE", url, headers=headers)
 
         data = self._parse_resp(resp)
         logger.info(

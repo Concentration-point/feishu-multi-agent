@@ -7,6 +7,7 @@
 
 import json
 from dataclasses import asdict
+from feishu.bitable import FeishuAPIError
 from tools import AgentContext
 from memory.project import ContentMemory
 
@@ -36,13 +37,17 @@ SCHEMA = {
 
 
 async def execute(params: dict, context: AgentContext) -> str:
-    cm = ContentMemory()
-    records = await cm.list_by_project(context.project_name)
+    try:
+        cm = ContentMemory()
+        records = await cm.list_by_project(context.project_name)
 
-    platform = (params.get("platform") or "").strip()
-    if platform:
-        needle = platform.lower()
-        records = [r for r in records if (r.platform or "").strip().lower() == needle]
+        platform = (params.get("platform") or "").strip()
+        if platform:
+            needle = platform.lower()
+            records = [r for r in records if (r.platform or "").strip().lower() == needle]
 
-    items = [asdict(r) for r in records]
-    return json.dumps(items, ensure_ascii=False, indent=2)
+        items = [asdict(r) for r in records]
+        return json.dumps(items, ensure_ascii=False, indent=2)
+
+    except FeishuAPIError as exc:
+        return f"飞书API错误（code={exc.code}）: {exc.msg}"

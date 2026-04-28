@@ -1,5 +1,6 @@
 """工具: 更新项目状态（带状态机校验）"""
 
+from feishu.bitable import FeishuAPIError
 from tools import AgentContext
 from memory.project import ProjectMemory
 from config import VALID_STATUSES
@@ -42,16 +43,20 @@ async def execute(params: dict, context: AgentContext) -> str:
     if target not in VALID_STATUSES:
         return f"错误: 无效状态 '{target}'。合法状态: {VALID_STATUSES}"
 
-    pm = ProjectMemory(context.record_id)
-    proj = await pm.load()
-    current = proj.status or "待处理"
+    try:
+        pm = ProjectMemory(context.record_id)
+        proj = await pm.load()
+        current = proj.status or "待处理"
 
-    allowed = _TRANSITIONS.get(current, [])
-    if target not in allowed:
-        return (
-            f"错误: 状态流转不合法。当前状态={current}，"
-            f"目标状态={target}，允许的流转: {allowed}"
-        )
+        allowed = _TRANSITIONS.get(current, [])
+        if target not in allowed:
+            return (
+                f"错误: 状态流转不合法。当前状态={current}，"
+                f"目标状态={target}，允许的流转: {allowed}"
+            )
 
-    await pm.update_status(target)
-    return f"状态已更新: {current} → {target}"
+        await pm.update_status(target)
+        return f"状态已更新: {current} → {target}"
+
+    except FeishuAPIError as exc:
+        return f"飞书API错误（code={exc.code}）: {exc.msg}"

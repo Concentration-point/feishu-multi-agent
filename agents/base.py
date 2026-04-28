@@ -17,10 +17,17 @@ from typing import Any
 
 import asyncio
 
-from openai import APIConnectionError, APITimeoutError, AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    InternalServerError,
+    RateLimitError,
+)
 
 from config import (
-    LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, LLM_MAX_RETRIES, LLM_TIMEOUT_SECONDS, EXPERIENCE_TOP_K,
+    LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, LLM_MAX_RETRIES, LLM_APP_MAX_RETRIES,
+    LLM_TIMEOUT_SECONDS, EXPERIENCE_TOP_K,
     L0_MESSAGE_WINDOW_MAX_TOKENS, L0_MESSAGE_WINDOW_RESERVE_TOKENS,
 )
 from memory.project import ProjectMemory
@@ -798,12 +805,13 @@ class BaseAgent:
                 )
                 break
         else:
-            # 达到最大迭代次数
+            # 达到最大迭代次数，截断输出并加标记，让 Orchestrator 可感知
             logger.warning(
-                "[%s] 达到最大迭代次数 %d，强制结束",
+                "[%s] 达到最大迭代次数 %d，强制结束，输出可能不完整",
                 self.soul.name, self.soul.max_iterations,
             )
-            final_output = window.messages[-1].get("content", "") if window.messages else ""
+            raw = window.messages[-1].get("content", "") if window.messages else ""
+            final_output = f"[TRUNCATED:max_iterations={self.soul.max_iterations}] {raw}"
 
         messages = window.messages  # 下游（Hook 自省、必调校验）沿用原变量名
 
@@ -1104,14 +1112,17 @@ class BaseAgent:
         if with_tools and self._tools_config:
             kwargs["tools"] = self._tools_config
 
-        max_attempts = 3
+        max_attempts = LLM_APP_MAX_RETRIES
+        # RateLimitError 需要更长等待；连接/超时/5xx 用较短退避
         backoff_seconds = [2, 4, 8]
+        rate_limit_backoff = [5, 15, 30]
 
         for attempt in range(1, max_attempts + 1):
             try:
                 return await self._llm.chat.completions.create(**kwargs)
-            except (APIConnectionError, APITimeoutError) as exc:
+            except (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError) as exc:
                 is_last = attempt == max_attempts
+                is_rate_limit = isinstance(exc, RateLimitError)
                 proxy_env = {
                     "http_proxy": os.getenv("http_proxy") or os.getenv("HTTP_PROXY") or "",
                     "https_proxy": os.getenv("https_proxy") or os.getenv("HTTPS_PROXY") or "",
@@ -1138,10 +1149,11 @@ class BaseAgent:
                 )
                 if is_last:
                     raise
-                delay = backoff_seconds[attempt - 1]
+                backoff = rate_limit_backoff if is_rate_limit else backoff_seconds
+                delay = backoff[attempt - 1]
                 logger.info(
-                    "[%s] LLM 重试前等待 %ds（应用层第 %d/%d 次）",
-                    self.soul.name, delay, attempt, max_attempts - 1,
+                    "[%s] LLM 重试前等待 %ds（应用层第 %d/%d 次，%s）",
+                    self.soul.name, delay, attempt, max_attempts - 1, type(exc).__name__,
                 )
                 await asyncio.sleep(delay)
 

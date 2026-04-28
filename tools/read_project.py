@@ -1,6 +1,7 @@
 """工具: 读取项目主表字段"""
 
 import json
+from feishu.bitable import FeishuAPIError
 from tools import AgentContext
 from memory.project import ProjectMemory
 from config import FIELD_MAP_PROJECT as FP
@@ -51,15 +52,19 @@ async def execute(params: dict, context: AgentContext) -> str:
     if not fields:
         return "错误: fields 参数不能为空"
 
-    pm = ProjectMemory(context.record_id)
-    proj = await pm.load()
+    try:
+        pm = ProjectMemory(context.record_id)
+        proj = await pm.load()
 
-    result = {}
-    for f in fields:
-        key = _FIELD_ALIAS.get(f, f)
-        if hasattr(proj, key):
-            result[f] = getattr(proj, key)
-        else:
-            result[f] = f"未知字段: {f}"
+        result = {}
+        for f in fields:
+            key = _FIELD_ALIAS.get(f, f)
+            if hasattr(proj, key):
+                result[f] = getattr(proj, key)
+            else:
+                result[f] = f"未知字段: {f}"
 
-    return json.dumps(result, ensure_ascii=False, indent=2)
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    except FeishuAPIError as exc:
+        return f"飞书API错误（code={exc.code}）: {exc.msg}"

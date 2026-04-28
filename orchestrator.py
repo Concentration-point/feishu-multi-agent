@@ -16,6 +16,7 @@ from config import (
     LLM_BASE_URL,
     LLM_MODEL,
     LLM_TIMEOUT_SECONDS,
+    MAX_ROUTE_STEPS,
     REVIEW_MAX_RETRIES,
     REVIEW_PASS_THRESHOLD_DEFAULT,
     REVIEW_STATUS_APPROVED,
@@ -67,7 +68,7 @@ class Orchestrator:
         self._start_time = 0.0
         self._review_threshold = REVIEW_PASS_THRESHOLD_DEFAULT
         self._review_red_flag = ""
-        self._max_route_steps = 15  # 防止路由死循环的安全上限
+        self._max_route_steps = MAX_ROUTE_STEPS
         self._pm = ProjectMemory(record_id)
 
     def _publish(self, event_type: str, payload: dict | None = None, *, agent_role: str = "", agent_name: str = "") -> None:
@@ -220,16 +221,26 @@ class Orchestrator:
             # ── 广播阶段结果 ──
             if result.ok:
                 summary = result.output[:200] if result.output else "已完成"
+                is_truncated = result.output.startswith("[TRUNCATED:")
                 await self._broadcast(
-                    title=f"{role_name} 完成",
+                    title=f"{role_name} 完成{'（输出截断）' if is_truncated else ''}",
                     content=f"耗时 {result.duration_sec:.1f}s\n\n{summary}",
-                    color="blue",
+                    color="orange" if is_truncated else "blue",
                 )
+                if is_truncated:
+                    logger.warning(
+                        "阶段 %s 输出被截断（达到 max_iterations），结果可能不完整", role_id
+                    )
             else:
                 await self._broadcast(
                     title="流水线异常",
                     content=f"阶段 **{role_name}** 执行失败\n\n`{result.error[:300]}`",
                     color="red",
+                )
+                # 回写 Bitable 让运营侧可从表格感知失败（_safe_update 写失败仅 warn，不影响主流程）
+                ts = time.strftime("%m-%d %H:%M")
+                await self._pm.write_agent_error_log(
+                    f"[{ts}][{role_id}] {result.error[:200]}"
                 )
 
             # ── 文案完成后兜底：扫 draft 为空的行，单次 LLM 补写 ──

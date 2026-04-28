@@ -1,6 +1,7 @@
 """工具: 批量创建内容排期行"""
 
 import json
+from feishu.bitable import FeishuAPIError
 from tools import AgentContext
 from memory.project import ContentMemory, ContentItem
 
@@ -49,23 +50,27 @@ async def execute(params: dict, context: AgentContext) -> str:
     if not raw_items:
         return "错误: items 不能为空"
 
-    content_items = [
-        ContentItem(
-            seq=it["sequence"],
-            title=it["title"],
-            platform=it["platform"],
-            content_type=it["content_type"],
-            key_point=it["key_message"],
-            target_audience=it["target_audience"],
-        )
-        for it in raw_items
-    ]
+    try:
+        content_items = [
+            ContentItem(
+                seq=it["sequence"],
+                title=it["title"],
+                platform=it["platform"],
+                content_type=it["content_type"],
+                key_point=it["key_message"],
+                target_audience=it["target_audience"],
+            )
+            for it in raw_items
+        ]
 
-    cm = ContentMemory()
-    record_ids = await cm.batch_create_content_items(
-        context.project_name, content_items
-    )
-    return json.dumps({
-        "message": f"已批量创建 {len(record_ids)} 条内容行",
-        "record_ids": record_ids,
-    }, ensure_ascii=False)
+        cm = ContentMemory()
+        record_ids = await cm.batch_create_content_items(
+            context.project_name, content_items
+        )
+        return json.dumps({
+            "message": f"已批量创建 {len(record_ids)} 条内容行",
+            "record_ids": record_ids,
+        }, ensure_ascii=False)
+
+    except FeishuAPIError as exc:
+        return f"飞书API错误（code={exc.code}）: {exc.msg}"

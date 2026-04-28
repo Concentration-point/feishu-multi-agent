@@ -8,6 +8,7 @@ import httpx
 
 from config import FEISHU_BASE_URL
 from feishu.auth import TokenManager
+from feishu.bitable import FeishuAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -33,11 +34,14 @@ class FeishuIMClient:
             data = resp.json()
         except Exception:
             resp.raise_for_status()
-            raise RuntimeError(f"HTTP {resp.status_code}, 响应非 JSON")
+            raise FeishuAPIError(-1, f"HTTP {resp.status_code}, 响应非 JSON")
         code = data.get("code", -1)
         if resp.status_code != 200 or code != 0:
             msg = data.get("msg", "unknown")
-            raise RuntimeError(f"IM API 错误: HTTP {resp.status_code} | code={code} | {msg}")
+            raise FeishuAPIError(
+                code,
+                f"HTTP {resp.status_code} | code={code} | {msg}",
+            )
         return data
 
     async def send_text(self, chat_id: str, text: str) -> dict:
