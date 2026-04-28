@@ -925,7 +925,7 @@ class Orchestrator:
             try:
                 await self._pm.update_status("排期中")
             except Exception as exc:
-                print(f"[Orchestrator] 警告: 审核通过后状态推进失败: {exc}")
+                print(f"[Orchestrator] 警告: 推进状态到排期中失败: {type(exc).__name__}: {exc}")
             return
 
         # 已达最大重试次数，强制推进到排期阶段，避免死循环
