@@ -216,3 +216,34 @@ Added a `RequestsOpenAICompatibleClient` for `api.luhengcheng.top` that mimics t
 - Tags: hermes, luhengcheng, custom-api, openai-compatible, streaming, requests-transport
 
 ---
+
+## [ERR-20260429-004] hermes_requests_stream_mojibake
+
+**Logged**: 2026-04-29T12:20:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: provider-transport
+
+### Summary
+After switching Hermes `api.luhengcheng.top` chat transport to `requests`, streamed replies could become mojibake because SSE lines were decoded using requests' guessed encoding.
+
+### Error
+```
+Latest Hermes reply was pure garbled text. Direct stream output showed mojibake like `â` for UTF-8 punctuation.
+```
+
+### Fix
+Changed `_RequestsChatCompletionsAdapter._stream_chunks()` to iterate raw bytes with `decode_unicode=False` and explicitly decode each SSE line as UTF-8 with replacement fallback. This prevents ISO-8859-1 fallback mojibake from `requests` when the provider omits charset.
+
+### Verification
+- Fake UTF-8 SSE test with Chinese + em dash passed via assertion.
+- Regression command passed: `python -m pytest -o addopts= tests/tools/test_image_generation.py tests/tools/test_image_generation_plugin_dispatch.py tests/agent/test_error_classifier.py -q` → 178 passed.
+- Gateway restarted.
+- Live endpoint test could not be repeated at this moment because `api.luhengcheng.top` returned Cloudflare 530 tunnel_error / retry_after=120.
+
+### Metadata
+- Reproducible: yes
+- Related Files: C:\Users\25723\Hermes agent\agent\auxiliary_client.py
+- Tags: hermes, mojibake, utf8, requests, sse, streaming
+
+---
