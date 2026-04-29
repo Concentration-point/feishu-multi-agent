@@ -535,6 +535,104 @@ async def pipeline_history(record_id: str):
     return JSONResponse(event_bus.get_history(record_id))
 
 
+@app.get("/api/tool-stats")
+async def tool_stats(limit: int = 50, since_hours: float = 0):
+    """读取 logs/tool_calls.jsonl，返回工具调用统计 + 最近失败记录。
+
+    - limit: 最近失败记录条数上限（默认 50）
+    - since_hours: 仅统计最近 N 小时内的记录（0=全量历史）
+    """
+    import json as _json
+    from collections import defaultdict
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    from pathlib import Path as _Path
+
+    # 固定绝对路径，与 tools/__init__.py 保持一致
+    jsonl = _Path(__file__).resolve().parent / "logs" / "tool_calls.jsonl"
+    records: list[dict] = []
+    if jsonl.exists():
+        for line in jsonl.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(_json.loads(line))
+            except Exception:
+                continue
+
+    # 按时间窗口过滤（since_hours > 0 时启用）
+    if since_hours > 0:
+        cutoff = _dt.now(_tz.utc) - _td(hours=since_hours)
+        def _ts(r: dict) -> _dt:
+            try:
+                return _dt.fromisoformat(r.get("ts", "")).astimezone(_tz.utc)
+            except Exception:
+                return _dt.min.replace(tzinfo=_tz.utc)
+        records = [r for r in records if _ts(r) >= cutoff]
+
+    # 聚合每个工具的统计
+    stats: dict[str, dict] = defaultdict(lambda: {
+        "total": 0, "ok": 0, "fail": 0, "durations": [], "errors": [],
+        "last_fail_ts": None, "last_fail_role": None,
+    })
+    for r in records:
+        t = r.get("tool", "unknown")
+        s = stats[t]
+        s["total"] += 1
+        if r.get("success"):
+            s["ok"] += 1
+        else:
+            s["fail"] += 1
+            if r.get("error"):
+                s["errors"].append(r["error"])
+            if r.get("ts"):
+                s["last_fail_ts"] = r["ts"]
+            if r.get("role_id"):
+                s["last_fail_role"] = r["role_id"]
+        d = r.get("duration_ms")
+        if d is not None:
+            s["durations"].append(d)
+
+    tool_list = []
+    for tool, s in sorted(stats.items()):
+        total = s["total"]
+        ok = s["ok"]
+        fail = s["fail"]
+        rate = round(ok / total * 100, 1) if total else 0.0
+        durations = s["durations"]
+        avg_ms = round(sum(durations) / len(durations)) if durations else None
+        tool_list.append({
+            "tool": tool,
+            "total": total,
+            "ok": ok,
+            "fail": fail,
+            "success_rate": rate,
+            "avg_ms": avg_ms,
+            "top_errors": list(dict.fromkeys(s["errors"]))[:3],
+            "last_fail_ts": s["last_fail_ts"],
+            "last_fail_role": s["last_fail_role"],
+        })
+
+    # 最近失败记录（倒序，含时间戳）
+    recent_failures = [
+        r for r in reversed(records) if not r.get("success")
+    ][:limit]
+
+    # 元信息
+    oldest_ts = records[0].get("ts") if records else None
+    newest_ts = records[-1].get("ts") if records else None
+
+    return JSONResponse({
+        "ok": True,
+        "total_records": len(records),
+        "since_hours": since_hours,
+        "oldest_ts": oldest_ts,
+        "newest_ts": newest_ts,
+        "tool_stats": tool_list,
+        "recent_failures": recent_failures,
+    })
+
+
 @app.get("/stream")
 async def global_event_stream():
     """全局 SSE 端点：接收所有项目的实时事件。Dashboard 默认连这个。"""

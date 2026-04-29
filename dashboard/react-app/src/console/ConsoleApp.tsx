@@ -17,6 +17,7 @@ import { CopywriterView } from "./views/CopywriterView";
 import { ReviewerView } from "./views/ReviewerView";
 import { PMView } from "./views/PMView";
 import { DAGView } from "./views/DAGView";
+import { ToolHealthView } from "./views/ToolHealthView";
 import { useConsoleStore } from "./useConsoleStore";
 import type { AgentSession, RoleId } from "./types";
 
@@ -41,9 +42,10 @@ const VIEW_MAP: Record<RoleId, (props: { session: AgentSession }) => ReactElemen
 };
 
 export function ConsoleApp({ session, oldPanel, isLive, isWaiting, onShowPicker }: ConsoleAppProps) {
-  const activeRole = useConsoleStore((s) => s.activeRole);
-  const viewMode   = useConsoleStore((s) => s.viewMode);
-  const graphMode  = useConsoleStore((s) => s.graphMode);
+  const activeRole  = useConsoleStore((s) => s.activeRole);
+  const viewMode    = useConsoleStore((s) => s.viewMode);
+  const graphMode   = useConsoleStore((s) => s.graphMode);
+  const healthMode  = useConsoleStore((s) => s.healthMode);
   const View = VIEW_MAP[activeRole];
 
   return (
@@ -62,7 +64,12 @@ export function ConsoleApp({ session, oldPanel, isLive, isWaiting, onShowPicker 
       {isWaiting && <WaitingOverlay />}
 
       {viewMode === "new" ? (
-        graphMode ? (
+        healthMode ? (
+          /* 工具健康面板：全屏，不带 Sidebar */
+          <div style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
+            <ToolHealthView />
+          </div>
+        ) : graphMode ? (
           /* DAG 全屏画布：不带 Sidebar，铺满内容区 */
           <div style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
             <DAGView session={session} />

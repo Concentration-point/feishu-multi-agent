@@ -12,6 +12,7 @@ interface ConsoleStore {
   activeRole: RoleId;
   viewMode: ViewMode;
   graphMode: boolean;
+  healthMode: boolean;
   drawerOpen: boolean;
   /** 绑定的 toolCall.id 或 "draft:seq_N" 或 "notes" */
   drawerKey: string | null;
@@ -19,6 +20,7 @@ interface ConsoleStore {
   setRole: (role: RoleId) => void;
   setViewMode: (mode: ViewMode) => void;
   setGraphMode: (v: boolean) => void;
+  setHealthMode: (v: boolean) => void;
   openDrawer: (key: string) => void;
   closeDrawer: () => void;
 }
@@ -28,12 +30,14 @@ export const useConsoleStore = create<ConsoleStore>((set) => ({
   activeRole: "account",
   viewMode: "new",
   graphMode: false,
+  healthMode: false,
   drawerOpen: false,
   drawerKey: null,
 
-  setRole: (activeRole) => set({ activeRole }),
+  setRole: (activeRole) => set({ activeRole, graphMode: false, healthMode: false }),
   setViewMode: (viewMode) => set({ viewMode }),
-  setGraphMode: (graphMode) => set({ graphMode }),
+  setGraphMode: (graphMode) => set({ graphMode, healthMode: false }),
+  setHealthMode: (healthMode) => set({ healthMode, graphMode: false }),
   openDrawer: (key) => set({ drawerOpen: true, drawerKey: key }),
   closeDrawer: () => set({ drawerOpen: false }),
 }));

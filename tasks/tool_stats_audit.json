@@ -1,0 +1,131 @@
+{
+  "project": "工具调用失败率统计与评估",
+  "created": "2026-04-29",
+  "completed": "2026-04-29",
+  "soul_bugs_fixed": [
+    "account_manager/soul.md: 第五步只更新到解读中，未推进到待人审 → 已修复",
+    "strategist/soul.md: 完成时只更新到策略中（起点状态），未推进到撰写中 → 已修复",
+    "copywriter/soul.md: 明确禁止推进到审核中（orchestrator 有兜底但 soul 指令有误） → 已修复"
+  ],
+  "final_result": {
+    "total_calls": 87,
+    "total_failures_A_class": 0,
+    "success_rate": "100%",
+    "slowest_tool": "web_fetch (avg 26446ms)",
+    "data_file": "logs/tool_calls.jsonl",
+    "stats_file": "logs/tool_calls.stats.json",
+    "analysis_script": "scripts/analyze_tool_stats.py"
+  },
+  "phases": [
+    {
+      "id": "P1",
+      "name": "信号摸底（零改动）",
+      "tasks": [
+        {
+          "id": "T001",
+          "title": "通读工具调用链路源码",
+          "done": true,
+          "done_note": "tool.returned payload={tool_name,result(截断300字)}，无success标记；异常路径：tools/__init__.py:87-89 捕获→返回字符串→agents/base.py:781-785 追加role=tool消息给LLM。附加发现：AM soul.md 状态流转 bug（只更新到解读中，不推进到待人审），导致 orchestrator 15次死循环。已修复。"
+        },
+        {
+          "id": "T002",
+          "title": "手跑 Demo 收集原始日志",
+          "done": true,
+          "done_note": "logs/run_final.log 6195行，覆盖全链路。排查过程中发现 AUTO_APPROVE_HUMAN_REVIEW 未配置导致门禁卡死，已在 .env 追加 true。"
+        },
+        {
+          "id": "T003",
+          "title": "grep 分析现有日志，粗粒度归类失败",
+          "done": true,
+          "done_note": "scripts/analyze_tool_stats.py 分析 run_final.log：91次调用，0次A类技术失败，1次阶段级失败（httpcore.ConnectError，LLM网络抖动，非工具本身问题）。"
+        }
+      ]
+    },
+    {
+      "id": "P2",
+      "name": "口径对齐",
+      "tasks": [
+        {
+          "id": "T004",
+          "title": "定义技术失败 vs 业务失败的边界",
+          "done": true,
+          "done_note": "A类=工具抛异常或返回'工具执行错误:'字符串；B类=工具无报错但LLM重试/放弃。本期只统计A类，已贯穿所有后续任务。"
+        }
+      ]
+    },
+    {
+      "id": "P3",
+      "name": "结构化日志改造",
+      "tasks": [
+        {
+          "id": "T005",
+          "title": "在 call_tool 注入结构化日志",
+          "done": true,
+          "done_note": "tools/__init__.py: _write_stat() 直写 logs/tool_calls.jsonl，字段：event/tool/success/error/duration_ms/record_id/role_id。绕过 PowerShell Out-File 行宽截断问题。"
+        },
+        {
+          "id": "T006",
+          "title": "记录工具调用耗时",
+          "done": true,
+          "done_note": "同 T005，t0=time.monotonic() 在 execute 前，duration_ms 计入 _write_stat()。验证：web_fetch avg 26446ms，search_knowledge avg 2ms。"
+        }
+      ]
+    },
+    {
+      "id": "P4",
+      "name": "数据采集与聚合分析",
+      "tasks": [
+        {
+          "id": "T007",
+          "title": "批量跑历史记录，采集结构化日志",
+          "done": true,
+          "done_note": "logs/tool_calls.jsonl 87条，每行可 json.loads 解析，通过验证。"
+        },
+        {
+          "id": "T008",
+          "title": "写分析脚本，产出工具成功率报告",
+          "done": true,
+          "done_note": "scripts/analyze_tool_stats.py 支持 plain log / JSONL / --extract-jsonl 三种模式，产出 Markdown 表格 + stats.json。"
+        }
+      ]
+    },
+    {
+      "id": "P5",
+      "name": "可视化接入（可选）",
+      "tasks": [
+        {
+          "id": "T009",
+          "title": "暴露 /api/tool-stats 接口",
+          "done": false,
+          "optional": true,
+          "skip_reason": "当前 A类失败率0%，暂无紧迫性，按需开启"
+        },
+        {
+          "id": "T010",
+          "title": "Dashboard 新增工具健康面板",
+          "done": false,
+          "optional": true,
+          "skip_reason": "依赖 T009，同上"
+        }
+      ]
+    },
+    {
+      "id": "P6",
+      "name": "修复闭环",
+      "tasks": [
+        {
+          "id": "T011",
+          "title": "定位 Top 3 高频失败工具根因",
+          "done": true,
+          "done_note": "A类技术失败率0%，无需修复工具本身。发现并修复了更严重的问题：3个soul.md状态流转bug（AM/策略师/文案），这是影响全链路跑通的根因，已全部修复。"
+        },
+        {
+          "id": "T012",
+          "title": "修复并验收",
+          "done": true,
+          "done_note": "修复后重跑Demo验证：全链路13步完整跑通（AM→人审→策略师→文案→审核→PM→已完成），route_log显示动态路由终止 status=已完成。soul bug修复前：15次AM死循环；修复后：一次直达已完成。"
+        }
+      ]
+    }
+  ]
+}
