@@ -151,3 +151,35 @@ For Hermes image/tool delivery errors, verify whether the error happens in: (1) 
 - Tags: hermes, image-generation, feishu, fallback-provider, 403
 
 ---
+
+## [ERR-20260429-002] hermes_image_tool_ignored_openai_plugin
+
+**Logged**: 2026-04-29T11:18:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: config
+
+### Summary
+Hermes `image_generate_tool` still used the legacy FAL path even after `image_gen.provider: openai` was configured.
+
+### Error
+```
+Unknown FAL model 'gpt-image-2-medium' in config; falling back to fal-ai/flux-2/klein/9b
+FAL_KEY environment variable not set
+```
+
+### Context
+- Direct test of `tools.image_generation_tool.image_generate_tool(...)` showed it ignored the OpenAI/gpt-image-2 plugin and tried FAL.
+- Fixed tool dispatch so configured plugin providers are used before the legacy FAL path.
+- OpenAI-compatible endpoint also needed a raw minimal `/images/generations` request via `requests`; the official SDK path or Python urllib hit provider-side block/incomplete read in this local setup.
+- Verified successful output saved under `C:\Users\25723\.hermes\cache\images\openai_gpt-image-2-medium_20260429_111633_e6bae612.png`.
+
+### Suggested Fix
+When a Hermes tool has both legacy implementation and plugin registry, test the direct tool function after config changes. Do not assume config selection is wired into the tool entry point.
+
+### Metadata
+- Reproducible: yes
+- Related Files: C:\Users\25723\Hermes agent\tools\image_generation_tool.py, C:\Users\25723\Hermes agent\plugins\image_gen\openai\__init__.py
+- Tags: hermes, image-generation, plugin-dispatch, gpt-image-2, fal
+
+---
