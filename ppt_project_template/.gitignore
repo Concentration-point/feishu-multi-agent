@@ -1,0 +1,6 @@
+﻿__pycache__/
+*.pyc
+output/*.pptx
+output/*.pdf
+output/previews/*.png
+!output/.gitkeep
