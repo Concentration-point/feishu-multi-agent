@@ -1,0 +1,30 @@
+{
+  "styles": [
+    {
+      "name": "Calm Academic",
+      "tag": "冷静学术：适合课堂论文汇报"
+    },
+    {
+      "name": "Swiss Tech",
+      "tag": "瑞士网格：技术感、结构化、少废话"
+    },
+    {
+      "name": "Bold Signal",
+      "tag": "强信号：深色高冲击，反 AI 味"
+    }
+  ],
+  "slides": [
+    "封面",
+    "方法框架",
+    "案例发现",
+    "结论"
+  ],
+  "criteria": [
+    "font personality",
+    "color memory",
+    "anti AI-slop",
+    "density comfort",
+    "story clarity"
+  ],
+  "recommended_for_this_paper": "Calm Academic for classroom; Swiss Tech if the audience is technical; Bold Signal for pitch-style presentation."
+}
