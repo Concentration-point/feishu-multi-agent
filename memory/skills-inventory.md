@@ -41,6 +41,7 @@
 |---|---|---|---|
 | agent-skills | 已学习 / 已吸收方法论 | 已吸收 Spec → Plan → Build → Verify → Review → Ship 骨架，并固化到 `CODING-SOP.md` | 默认用于 coding / debug / 配置排障 / 部署修复 |
 | claude-mem | 已研究 / 已吸收设计思想 | 已吸收自动记忆、分层检索、渐进披露、语义召回思路 | 评估是否与现有 OpenClaw 记忆机制接入或部分借鉴 |
+| frontend-slides（zarazhangrui） | 已评估 / 已吸收方法论，未安装 | 已吸收 Show-Don't-Tell、Anti-AI-Slop、风格预设、视口适配、内容密度上限；已转译进 `PPT-GENERATION-SOP.md` | 仅作为 PPT 审美系统参考；若要安装/启用仍需单独批准 |
 | markitdown（方法层） | 已研究 / 已吸收设计思想 | 已吸收“统一内容摄入为 Markdown”“窄口调用减少风险”的思路 | 已结合本地安装纳入 `RETRIEVAL-SOP.md` |
 
 ## D. 新增 skill 推荐前检查清单
