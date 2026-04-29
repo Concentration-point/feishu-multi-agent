@@ -119,3 +119,35 @@ After patching runtime chunks, restart Gateway and validate from a fresh process
 - Related Files: C:\Users\25723\AppData\Roaming\npm\node_modules\openclaw\dist\image-generation-provider-fiOkT1Zi.js
 
 ---
+
+## [ERR-20260429-001] hermes_image_generation_delivery_403
+
+**Logged**: 2026-04-29T10:57:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: config
+
+### Summary
+Initial Hermes image-generation fix targeted only remote generated-image caching, but user reported the same error again.
+
+### Error
+```
+Hermes still returned the same visible error after restart. Latest logs showed the failing request was a main-model provider block (`Your request was blocked`, HTTP 403-ish), not only Feishu fetching a generated image URL.
+```
+
+### Context
+- User asked to fix Hermes image generation delivery after a 403 screenshot.
+- First fix cached provider image URLs locally before Feishu upload and passed image-generation tests.
+- Follow-up showed the actual remaining failure path was the primary `custom-api` model (`gpt-5.5` via `https://api.luhengcheng.top/v1`) being blocked before the tool/follow-up completed.
+- Hermes config had no fallback providers despite `OPENAI_API_KEY` being available.
+- Added `openai-direct` custom provider and configured it as fallback (`gpt-4o-mini`) so provider-side request blocks can fail over.
+
+### Suggested Fix
+For Hermes image/tool delivery errors, verify whether the error happens in: (1) image provider URL fetch, (2) platform media upload, or (3) main LLM follow-up. Do not assume all 403s are media-download 403s.
+
+### Metadata
+- Reproducible: yes
+- Related Files: C:\Users\25723\.hermes\config.yaml, C:\Users\25723\Hermes agent\tools\image_generation_tool.py, C:\Users\25723\Hermes agent\run_agent.py
+- Tags: hermes, image-generation, feishu, fallback-provider, 403
+
+---
