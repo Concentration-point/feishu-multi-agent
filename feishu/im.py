@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from config import FEISHU_BASE_URL
+from config import FEISHU_BASE_URL, IM_TIMEOUT_SECONDS
 from feishu.auth import TokenManager
 from feishu.bitable import FeishuAPIError
 
@@ -52,7 +52,7 @@ class FeishuIMClient:
             "msg_type": "text",
             "content": json.dumps({"text": text}, ensure_ascii=False),
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(IM_TIMEOUT_SECONDS)) as client:
             resp = await client.post(
                 MESSAGES_URL, headers=headers, json=payload,
                 params={"receive_id_type": "chat_id"},
@@ -99,7 +99,7 @@ class FeishuIMClient:
             "page_size": str(page_size),
             "sort_type": "ByCreateTimeAsc",
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(IM_TIMEOUT_SECONDS)) as client:
             resp = await client.get(MESSAGES_URL, headers=headers, params=params)
         data = self._check(resp)
         items = data.get("data", {}).get("items", [])
@@ -156,7 +156,7 @@ class FeishuIMClient:
             "msg_type": "interactive",
             "content": json.dumps(card, ensure_ascii=False),
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(IM_TIMEOUT_SECONDS)) as client:
             resp = await client.post(
                 MESSAGES_URL, headers=headers, json=payload,
                 params={"receive_id_type": "chat_id"},

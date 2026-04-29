@@ -18,6 +18,7 @@ from config import (
     LLM_TIMEOUT_SECONDS,
     MAX_ROUTE_STEPS,
     REVIEW_MAX_RETRIES,
+    STAGE_TIMEOUT_SECONDS,
     REVIEW_PASS_THRESHOLD_DEFAULT,
     REVIEW_STATUS_APPROVED,
     REVIEW_STATUS_NEED_REVISE,
@@ -362,10 +363,16 @@ class Orchestrator:
         start = time.perf_counter()
         try:
             agent = BaseAgent(role_id=role_id, record_id=self.record_id, event_bus=self._event_bus)
-            output = await agent.run()
+            output = await asyncio.wait_for(agent.run(), timeout=STAGE_TIMEOUT_SECONDS)
             duration = time.perf_counter() - start
             print(f"[Orchestrator] 阶段 {role_id} 完成，耗时 {duration:.2f} 秒")
             return StageResult(role_id=role_id, ok=True, duration_sec=duration, output=output or ""), agent
+        except asyncio.TimeoutError:
+            duration = time.perf_counter() - start
+            message = f"阶段超时（>{STAGE_TIMEOUT_SECONDS:.0f}s），强制中止"
+            print(f"[Orchestrator] 阶段 {role_id} 超时，耗时 {duration:.2f} 秒")
+            logger.error("阶段 %s 超时 (>%ss)", role_id, STAGE_TIMEOUT_SECONDS)
+            return StageResult(role_id=role_id, ok=False, duration_sec=duration, error=message), None
         except Exception as exc:
             duration = time.perf_counter() - start
             message = f"{type(exc).__name__}: {exc}"

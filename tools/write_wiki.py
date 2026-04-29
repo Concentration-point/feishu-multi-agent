@@ -18,6 +18,7 @@ WIKI_WRITE_SUBDIR = "11_待整理收件箱"
 # 旧分层：历史数据留存，不再新写
 LEGACY_WIKI_SUBDIR = "wiki"
 
+import asyncio
 import json
 import hashlib
 import re
@@ -245,21 +246,22 @@ async def execute(params: dict, context: AgentContext) -> str:
     cat_dir.mkdir(parents=True, exist_ok=True)
 
     # 写入文件（统一 wiki 模板）
+    # asyncio.to_thread：防止同步 write_text 在网络盘场景阻塞事件循环
     file_content = build_wiki_document(
         title=title,
         content=content,
         category=category,
         role=context.role_id,
     )
-    target_file.write_text(file_content, encoding="utf-8")
+    await asyncio.to_thread(target_file.write_text, file_content, encoding="utf-8")
 
     # 更新索引（指向新分层）
-    update_wiki_index(inbox_dir, url_prefix=WIKI_WRITE_SUBDIR)
+    await asyncio.to_thread(update_wiki_index, inbox_dir, url_prefix=WIKI_WRITE_SUBDIR)
 
     # 标记 dirty（使用新分层路径；sync 会根据黑名单决定是否实际推送）
     rel_path = f"{WIKI_WRITE_SUBDIR}/{safe_category}/{safe_title}.md"
-    mark_dirty(base_path, rel_path)
-    mark_dirty(base_path, f"{WIKI_WRITE_SUBDIR}/_index.md")
+    await asyncio.to_thread(mark_dirty, base_path, rel_path)
+    await asyncio.to_thread(mark_dirty, base_path, f"{WIKI_WRITE_SUBDIR}/_index.md")
 
     return (
         f"已写入 {WIKI_WRITE_SUBDIR}/{safe_category}/{safe_title}.md"

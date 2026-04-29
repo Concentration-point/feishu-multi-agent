@@ -82,6 +82,10 @@ LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
 LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))       # SDK 层内置重试数（极短抖动）
 LLM_APP_MAX_RETRIES: int = int(os.getenv("LLM_APP_MAX_RETRIES", "3"))  # 应用层指数退避重试数
 MAX_ROUTE_STEPS: int = int(os.getenv("MAX_ROUTE_STEPS", "15"))  # 防路由死循环安全上限
+STAGE_TIMEOUT_SECONDS: float = float(os.getenv("STAGE_TIMEOUT_SECONDS", "600"))  # 单 Agent 阶段超时（秒）
+IM_TIMEOUT_SECONDS: float = float(os.getenv("IM_TIMEOUT_SECONDS", "15"))  # 飞书 IM API 超时（秒）
+TOOL_CB_THRESHOLD: int = int(os.getenv("TOOL_CB_THRESHOLD", "5"))      # 工具连续失败熔断阈值
+TOOL_CB_RESET_SECONDS: float = float(os.getenv("TOOL_CB_RESET_SECONDS", "60"))  # 熔断自动恢复间隔（秒）
 
 # ── L0 工作记忆（对话窗口保护）──
 # max: 对话总 token 上限（按 estimate_tokens 估算）
