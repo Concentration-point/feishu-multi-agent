@@ -1,0 +1,45 @@
+{
+  "format": "ppt169",
+  "colors": {
+    "primary": "#0A1424",
+    "secondary": "#12223A",
+    "background": "#F7FAFD",
+    "text": "#1D2838",
+    "muted": "#5C6C80",
+    "accent_cyan": "#1BB7E0",
+    "accent_orange": "#F18E2B",
+    "accent_green": "#2BA675",
+    "accent_purple": "#8457D6"
+  },
+  "typography": {
+    "title_family": "Microsoft YaHei",
+    "body_family": "Microsoft YaHei",
+    "mono_family": "Consolas",
+    "body_size": 15
+  },
+  "page_rhythm": {
+    "P01": "anchor",
+    "P02": "dense",
+    "P03": "dense",
+    "P04": "dense",
+    "P05": "dense",
+    "P06": "dense",
+    "P07": "dense",
+    "P08": "dense",
+    "P09": "dense",
+    "P10": "dense",
+    "P11": "dense",
+    "P12": "dense",
+    "P13": "breathing",
+    "P14": "dense",
+    "P15": "anchor"
+  },
+  "images": {
+    "style_anchor": "clean academic technology presentation, white/deep navy, cyan/orange accents, vector-like, no text in generated assets"
+  },
+  "quality_rules": [
+    "no raw complex formulas in PPT text boxes",
+    "formula pages use PNG formula panels",
+    "every content page has at least two modules and one visual anchor"
+  ]
+}

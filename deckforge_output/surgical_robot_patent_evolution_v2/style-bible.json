@@ -1,0 +1,8 @@
+{
+  "name": "DeckForge Academic Tech v2",
+  "scenario": "15-minute classroom paper report",
+  "layout_density": "dense by default; breathing only for synthesis pages",
+  "color_use": "60% light background, 30% navy structure, 10% cyan/orange accents",
+  "formula_policy": "all formulas rendered as images to avoid PPT character corruption",
+  "image_policy": "no standalone AI images generated for this rebuild; vector diagrams + formula PNGs used for controllability"
+}

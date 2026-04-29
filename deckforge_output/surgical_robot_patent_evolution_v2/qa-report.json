@@ -1,0 +1,9 @@
+{
+  "pptx": "C:\\Users\\25723\\.openclaw\\workspace\\deckforge_output\\surgical_robot_patent_evolution_v2\\Technological_Origination_Evolution_Surgical_Robot_DeckForge_v2.pptx",
+  "slides": 15,
+  "formula_policy": "formula images used: formula_ti.png, formula_tep.png, formula_path.png",
+  "density_policy": "all content pages have >=2 modules and >=1 visual anchor by construction",
+  "xml_replacement_char_scan": "PASS",
+  "standalone_image_generation": "not used in v2 rebuild",
+  "editable_elements": "text, cards, nodes, arrows are native PPT shapes; formulas are PNG panels to prevent乱码"
+}

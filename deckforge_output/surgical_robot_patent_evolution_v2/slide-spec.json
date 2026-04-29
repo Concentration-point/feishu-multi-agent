@@ -1,0 +1,92 @@
+[
+  {
+    "page": 1,
+    "title": "封面",
+    "takeaway": "用 claim-level 视角重新解释技术演化",
+    "rhythm": "anchor"
+  },
+  {
+    "page": 2,
+    "title": "Deck Brief",
+    "takeaway": "围绕 why/how/case/so what 四段讲",
+    "rhythm": "dense"
+  },
+  {
+    "page": 3,
+    "title": "研究缺口",
+    "takeaway": "论文补足“技术起源与融合”解释",
+    "rhythm": "dense"
+  },
+  {
+    "page": 4,
+    "title": "总体框架",
+    "takeaway": "五段流程：收集、预处理、TI、TEP、主路径/起源",
+    "rhythm": "dense"
+  },
+  {
+    "page": 5,
+    "title": "Claims 表示",
+    "takeaway": "claims 被转成技术词 0-1 矩阵",
+    "rhythm": "dense"
+  },
+  {
+    "page": 6,
+    "title": "TI 指标",
+    "takeaway": "TI 是引用边上的技术继承强度",
+    "rhythm": "dense"
+  },
+  {
+    "page": 7,
+    "title": "Claim 主技术起源",
+    "takeaway": "MSCI 把 claim 追溯到最相似的被引 claim",
+    "rhythm": "dense"
+  },
+  {
+    "page": 8,
+    "title": "TEP 指标",
+    "takeaway": "TEP 用被继承程度衡量 claim 重要性",
+    "rhythm": "dense"
+  },
+  {
+    "page": 9,
+    "title": "主路径构建",
+    "takeaway": "用 TEP 选重要专利，再筛主路径",
+    "rhythm": "dense"
+  },
+  {
+    "page": 10,
+    "title": "起源与发展分析",
+    "takeaway": "从专利级路径深入到 claim 级技术融合",
+    "rhythm": "dense"
+  },
+  {
+    "page": 11,
+    "title": "案例数据",
+    "takeaway": "TI 长尾说明 citation 强度需要细分",
+    "rhythm": "dense"
+  },
+  {
+    "page": 12,
+    "title": "重要技术元素",
+    "takeaway": "热点从机械/影像控制转向系统集成、微处理器和微创器械",
+    "rhythm": "dense"
+  },
+  {
+    "page": 13,
+    "title": "四条主路径",
+    "takeaway": "四条路径对应四类手术机器人技术故事",
+    "rhythm": "breathing"
+  },
+  {
+    "page": 14,
+    "title": "Path 2 深挖",
+    "takeaway": "影像导航路径体现多技术来源汇入主链",
+    "rhythm": "dense"
+  },
+  {
+    "page": 15,
+    "title": "总结",
+    "takeaway": "claim-level technical element network 是本文核心价值",
+    "rhythm": "anchor"
+  }
+]
