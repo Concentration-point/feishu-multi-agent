@@ -1,0 +1,11 @@
+{
+  "approach": "AI-generated full-slide visual bases + editable text overlays for factual accuracy",
+  "assets": {
+    "cover": "deckforge_output\\surgical_robot_patent_evolution_ai_generated\\ai_assets\\cover.png",
+    "method": "deckforge_output\\surgical_robot_patent_evolution_ai_generated\\ai_assets\\method.png",
+    "formula": "deckforge_output\\surgical_robot_patent_evolution_ai_generated\\ai_assets\\formula.png",
+    "case": "deckforge_output\\surgical_robot_patent_evolution_ai_generated\\ai_assets\\case.png",
+    "paths": "deckforge_output\\surgical_robot_patent_evolution_ai_generated\\ai_assets\\paths.png"
+  },
+  "warning": "Generated images intentionally contain no readable text to avoid hallucinated/garbled text; all real text is native PPT overlay."
+}

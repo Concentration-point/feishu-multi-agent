@@ -1,0 +1,7 @@
+{
+  "slides": 15,
+  "image_generation": "5 full-slide AI visual assets generated with openai/gpt-image-2 and reused consistently",
+  "text_policy": "real Chinese text and facts are editable overlays, not generated inside images",
+  "reason": "image models are unreliable for exact Chinese/formulas; this preserves visual quality plus factual correctness",
+  "xml_replacement_char_scan": "PASS"
+}

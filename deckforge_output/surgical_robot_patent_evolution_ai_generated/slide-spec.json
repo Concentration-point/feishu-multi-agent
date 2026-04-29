@@ -1,0 +1,92 @@
+[
+  {
+    "page": 1,
+    "title": "Cover",
+    "asset": "cover",
+    "note": "AI-generated full-slide cover"
+  },
+  {
+    "page": 2,
+    "title": "汇报主线",
+    "asset": "cover",
+    "note": "Deck Brief：15 分钟只讲一条线"
+  },
+  {
+    "page": 3,
+    "title": "研究缺口",
+    "asset": "method",
+    "note": "趋势分析很多，技术起源分析不足"
+  },
+  {
+    "page": 4,
+    "title": "总体框架",
+    "asset": "method",
+    "note": "Source → Claims → TI → TEP → Main Paths → Origins"
+  },
+  {
+    "page": 5,
+    "title": "Claims 如何进入模型？",
+    "asset": "method",
+    "note": "Claims 被向量化为微观技术元素"
+  },
+  {
+    "page": 6,
+    "title": "TI：技术继承度",
+    "asset": "formula",
+    "note": "引用关系 j → i 上，claim-to-claim 最大相似度的平均值"
+  },
+  {
+    "page": 7,
+    "title": "Main Technical Origin",
+    "asset": "formula",
+    "note": "每个 claim 在所有被引专利中找主来源"
+  },
+  {
+    "page": 8,
+    "title": "TEP：技术元素持续性",
+    "asset": "formula",
+    "note": "一个 claim 被后续技术持续继承，TEP 就越高"
+  },
+  {
+    "page": 9,
+    "title": "Main Paths 构建",
+    "asset": "formula",
+    "note": "先筛重要专利，再构建 RNIT"
+  },
+  {
+    "page": 10,
+    "title": "案例数据",
+    "asset": "case",
+    "note": "Surgical Robot Domain：3313 件专利，13097 条内部引用"
+  },
+  {
+    "page": 11,
+    "title": "技术热点变化",
+    "asset": "case",
+    "note": "TEP 展示 2011–2015 与 2016–2020 的重要技术元素变化"
+  },
+  {
+    "page": 12,
+    "title": "四条主路径",
+    "asset": "paths",
+    "note": "手术机器人技术演化的四个子领域故事"
+  },
+  {
+    "page": 13,
+    "title": "重点路径：Path 2 技术融合",
+    "asset": "paths",
+    "note": "扫描/影像导航路径最能体现 origin analysis 的解释力"
+  },
+  {
+    "page": 14,
+    "title": "论文评价",
+    "asset": "paths",
+    "note": "贡献清楚，但 NLP 表征偏弱"
+  },
+  {
+    "page": 15,
+    "title": "Conclusion",
+    "asset": "cover",
+    "note": "AI visual conclusion"
+  }
+]
