@@ -11,12 +11,14 @@ import type { RoleId, ViewMode } from "./types";
 interface ConsoleStore {
   activeRole: RoleId;
   viewMode: ViewMode;
+  graphMode: boolean;
   drawerOpen: boolean;
   /** 绑定的 toolCall.id 或 "draft:seq_N" 或 "notes" */
   drawerKey: string | null;
 
   setRole: (role: RoleId) => void;
   setViewMode: (mode: ViewMode) => void;
+  setGraphMode: (v: boolean) => void;
   openDrawer: (key: string) => void;
   closeDrawer: () => void;
 }
@@ -25,11 +27,13 @@ export const useConsoleStore = create<ConsoleStore>((set) => ({
   // 默认焦点：客户经理（流水线第一棒），避免打开就停在"文案"上造成阶段感错位
   activeRole: "account",
   viewMode: "new",
+  graphMode: false,
   drawerOpen: false,
   drawerKey: null,
 
   setRole: (activeRole) => set({ activeRole }),
   setViewMode: (viewMode) => set({ viewMode }),
+  setGraphMode: (graphMode) => set({ graphMode }),
   openDrawer: (key) => set({ drawerOpen: true, drawerKey: key }),
   closeDrawer: () => set({ drawerOpen: false }),
 }));

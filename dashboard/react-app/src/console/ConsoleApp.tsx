@@ -16,6 +16,7 @@ import { StrategyView } from "./views/StrategyView";
 import { CopywriterView } from "./views/CopywriterView";
 import { ReviewerView } from "./views/ReviewerView";
 import { PMView } from "./views/PMView";
+import { DAGView } from "./views/DAGView";
 import { useConsoleStore } from "./useConsoleStore";
 import type { AgentSession, RoleId } from "./types";
 
@@ -41,7 +42,8 @@ const VIEW_MAP: Record<RoleId, (props: { session: AgentSession }) => ReactElemen
 
 export function ConsoleApp({ session, oldPanel, isLive, isWaiting, onShowPicker }: ConsoleAppProps) {
   const activeRole = useConsoleStore((s) => s.activeRole);
-  const viewMode = useConsoleStore((s) => s.viewMode);
+  const viewMode   = useConsoleStore((s) => s.viewMode);
+  const graphMode  = useConsoleStore((s) => s.graphMode);
   const View = VIEW_MAP[activeRole];
 
   return (
@@ -60,38 +62,45 @@ export function ConsoleApp({ session, oldPanel, isLive, isWaiting, onShowPicker 
       {isWaiting && <WaitingOverlay />}
 
       {viewMode === "new" ? (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "minmax(0, 1fr) 340px",
-            overflow: "hidden",
-            minHeight: 0,
-          }}
-        >
-          <main
-            className="scroll-thin"
+        graphMode ? (
+          /* DAG 全屏画布：不带 Sidebar，铺满内容区 */
+          <div style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
+            <DAGView session={session} />
+          </div>
+        ) : (
+          <div
             style={{
-              overflowY: "auto",
-              padding: "28px 36px 80px",
-              minWidth: 0,
+              display: "grid",
+              gridTemplateColumns: "minmax(0, 1fr) 340px",
+              overflow: "hidden",
+              minHeight: 0,
             }}
           >
-            <div style={{ maxWidth: "1080px", margin: "0 auto" }}>
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={activeRole}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -4 }}
-                  transition={{ duration: 0.18 }}
-                >
-                  <View session={session} />
-                </motion.div>
-              </AnimatePresence>
-            </div>
-          </main>
-          <Sidebar session={session} />
-        </div>
+            <main
+              className="scroll-thin"
+              style={{
+                overflowY: "auto",
+                padding: "28px 36px 80px",
+                minWidth: 0,
+              }}
+            >
+              <div style={{ maxWidth: "1080px", margin: "0 auto" }}>
+                <AnimatePresence mode="wait">
+                  <motion.div
+                    key={activeRole}
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -4 }}
+                    transition={{ duration: 0.18 }}
+                  >
+                    <View session={session} />
+                  </motion.div>
+                </AnimatePresence>
+              </div>
+            </main>
+            <Sidebar session={session} />
+          </div>
+        )
       ) : (
         <div style={{ overflow: "hidden", minHeight: 0 }}>{oldPanel}</div>
       )}

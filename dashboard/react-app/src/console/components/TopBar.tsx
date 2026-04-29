@@ -12,7 +12,7 @@
  */
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Play, Radio, Database } from "lucide-react";
+import { Play, Radio, Database, GitBranch } from "lucide-react";
 import { useConsoleStore } from "../useConsoleStore";
 import type { AgentSession, RoleId } from "../types";
 
@@ -31,7 +31,7 @@ interface TopBarProps {
 }
 
 export function TopBar({ session, isLive = false, onShowPicker }: TopBarProps) {
-  const { activeRole, viewMode, setRole, setViewMode } = useConsoleStore();
+  const { activeRole, viewMode, graphMode, setRole, setViewMode, setGraphMode } = useConsoleStore();
 
   return (
     <header
@@ -96,18 +96,80 @@ export function TopBar({ session, isLive = false, onShowPicker }: TopBarProps) {
         }}
       />
 
-      {/* 角色 tabs */}
+      {/* 角色 tabs + Graph 入口 */}
       <nav
         className="relative flex items-center"
         style={{ gap: "2px", flex: 1 }}
       >
+        {/* Graph tab（最左，点击切换 DAG 全屏画布） */}
+        <motion.button
+          type="button"
+          onClick={() => setGraphMode(!graphMode)}
+          whileTap={{ scale: 0.96 }}
+          transition={{ type: "spring", stiffness: 400, damping: 28 }}
+          className="relative flex items-center font-mono"
+          style={{
+            gap:        "6px",
+            padding:    "7px 12px",
+            borderRadius: "6px",
+            fontSize:   "11px",
+            letterSpacing: ".06em",
+            color:      graphMode ? "var(--acc-violet)" : "var(--color-text-3)",
+            background: "transparent",
+            border:     "none",
+            cursor:     "pointer",
+            zIndex:     1,
+          }}
+          onMouseEnter={(e) => { if (!graphMode) e.currentTarget.style.color = "var(--color-text-1)"; }}
+          onMouseLeave={(e) => { if (!graphMode) e.currentTarget.style.color = "var(--color-text-3)"; }}
+        >
+          {graphMode && (
+            <motion.span
+              layoutId="role-active-pill"
+              aria-hidden
+              style={{
+                position:     "absolute",
+                inset:        0,
+                borderRadius: "6px",
+                background:   "var(--color-bg-2)",
+                border:       "1px solid rgba(168,155,255,.25)",
+                zIndex:       -1,
+              }}
+              transition={{ type: "spring", stiffness: 380, damping: 32 }}
+            />
+          )}
+          <GitBranch size={12} />
+          <span>Graph</span>
+          {graphMode && (
+            <motion.span
+              layoutId="role-active-dot"
+              aria-hidden
+              style={{
+                position:     "absolute",
+                left:         "50%",
+                bottom:       "-13px",
+                transform:    "translateX(-50%)",
+                width:        "5px",
+                height:       "5px",
+                borderRadius: "50%",
+                background:   "var(--acc-violet)",
+                boxShadow:    "0 0 8px rgba(168,155,255,.6)",
+              }}
+              transition={{ type: "spring", stiffness: 380, damping: 32 }}
+            />
+          )}
+        </motion.button>
+
+        {/* 分隔线 */}
+        <span aria-hidden style={{ width: 1, height: 16, background: "rgba(255,255,255,.07)", margin: "0 4px", flexShrink: 0 }} />
+
         {ROLES.map((r) => {
-          const active = r.id === activeRole;
+          const active = r.id === activeRole && !graphMode;
           return (
             <motion.button
               key={r.id}
               type="button"
-              onClick={() => setRole(r.id)}
+              onClick={() => { setRole(r.id); setGraphMode(false); }}
               whileTap={{ scale: 0.96 }}
               transition={{ type: "spring", stiffness: 400, damping: 28 }}
               className="relative flex items-center font-medium"

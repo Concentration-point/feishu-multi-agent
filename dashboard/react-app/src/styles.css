@@ -46,6 +46,19 @@
   --transition-slow: 400ms ease;
 }
 
+/* ── DAG accent tokens (不覆盖旧面板的 --bg-* 变量) ── */
+:root {
+  --acc-mint:   #7CF1B5; --acc-mint-bg:   rgba(124,241,181,.08); --acc-mint-border:  rgba(124,241,181,.22);
+  --acc-cyan:   #6FD9F1; --acc-cyan-bg:   rgba(111,217,241,.08); --acc-cyan-border:  rgba(111,217,241,.22);
+  --acc-amber:  #F2C879; --acc-amber-bg:  rgba(242,200,121,.08); --acc-amber-border: rgba(242,200,121,.22);
+  --acc-coral:  #F08672; --acc-coral-bg:  rgba(240,134,114,.08); --acc-coral-border: rgba(240,134,114,.22);
+  --acc-violet: #A89BFF; --acc-violet-bg: rgba(168,155,255,.08); --acc-violet-border:rgba(168,155,255,.22);
+  --acc-rose:   #F58FB6; --acc-rose-bg:   rgba(245,143,182,.08); --acc-rose-border:  rgba(245,143,182,.22);
+  --glow-mint:   0 0 24px rgba(124,241,181,.18);
+  --glow-cyan:   0 0 24px rgba(111,217,241,.18);
+  --glow-violet: 0 0 24px rgba(168,155,255,.18);
+}
+
 html { font-size: 14px; }
 
 body {
