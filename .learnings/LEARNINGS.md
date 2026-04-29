@@ -359,3 +359,26 @@ When fixing Hermes image failures, separate three layers explicitly: chat/orches
 - Tags: hermes, image-generation, gpt-image-2, config
 
 ---
+
+## [LRN-20260429-002] best_practice
+
+**Logged**: 2026-04-29T11:25:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: config
+
+### Summary
+For Hermes/Feishu image generation, copy OpenClaw's successful chain by bypassing the chat model for direct image requests.
+
+### Details
+User pointed out that OpenClaw succeeded because the image request was routed directly to the image tool/model (`gpt-image-2`) instead of asking the chat model to reason first. Hermes was failing before tool invocation: primary chat model got HTTP 403 and the misconfigured OpenAI fallback got HTTP 401. The fix was to remove the bad chat fallback and add a direct image-generation route in `gateway/run.py` for clear image requests, returning `MEDIA:"<local-cache-path>"` after `image_generate_tool` succeeds.
+
+### Suggested Action
+When image generation is a first-class intent, don't make the chat LLM a mandatory hop. Route deterministic media intents directly to the image backend when safe, and reserve chat models for ambiguous/meta requests.
+
+### Metadata
+- Source: user_feedback
+- Related Files: C:\Users\25723\Hermes agent\gateway\run.py, C:\Users\25723\.hermes\config.yaml
+- Tags: hermes, image-generation, direct-routing, feishu, gpt-image-2
+
+---
