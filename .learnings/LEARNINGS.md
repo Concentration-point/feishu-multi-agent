@@ -461,3 +461,27 @@ Upgrade PPT SOP/template validation: require visual density checks, per-slide vi
 - Pattern-Key: ppt.validate_visual_quality
 - Recurrence-Count: 1
 ---
+
+## [LRN-20260430-002] correction
+
+**Logged**: 2026-04-30T01:55:53.185609
+**Priority**: critical
+**Status**: pending
+**Area**: ppt-generation
+
+### Summary
+PPT visual upgrade overcorrected: too little text, insufficient content depth, pages felt empty. User requires Hermes strict review before any PPT is sent.
+
+### Details
+After fixing monotone all-text slides with more figures and diagrams, the result became too sparse. A good academic PPT must balance visual anchors with enough explanatory content: claim/evidence/takeaway/notes. User explicitly set a new gate: before sending PPT to them, send it to Hermes for strict review; only send to user after Hermes passes it.
+
+### Suggested Action
+Update PPT workflow: every slide needs content density floor (core point + evidence + analysis/explanation). Add mandatory Hermes review gate before user delivery. If Hermes fails, revise and re-review; do not send to user prematurely.
+
+### Metadata
+- Source: user_feedback
+- Related Files: PPT-GENERATION-SOP.md; deckforge_output/surgical_robot_claims_ppt/build_surgical_robot_ppt_visual_v2.py
+- Tags: ppt, hermes-review, content-density, quality-gate
+- Pattern-Key: ppt.hermes_preflight_gate
+- Recurrence-Count: 1
+---
