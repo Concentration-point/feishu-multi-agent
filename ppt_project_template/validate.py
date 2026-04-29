@@ -36,10 +36,18 @@ def validate(path: Path, expected_slides: int | None = None):
             warnings.append(f"slide {i}: no editable text detected")
         if len(text_shapes) > 18:
             warnings.append(f"slide {i}: many text boxes ({len(text_shapes)}), may be crowded")
+        picture_count = sum(1 for s in shapes if getattr(s, 'shape_type', None) == 13)
+        if picture_count == 0 and len(shapes) < 6:
+            warnings.append(f"slide {i}: no picture and few visual shapes; may feel text-only")
         for s in shapes:
             if s.left < -10000 or s.top < -10000 or s.left + s.width > SLIDE_W + 10000 or s.top + s.height > SLIDE_H + 10000:
                 warnings.append(f"slide {i}: shape may overflow bounds")
             if shape_has_text(s):
+                text = s.text_frame.text.strip()
+                if '�' in text or '?' in text or '????' in text:
+                    issues.append(f"slide {i}: possible mojibake/replacement text: {text[:40]}")
+                if len(text) > 150:
+                    warnings.append(f"slide {i}: long text box ({len(text)} chars), possible overflow risk")
                 for p in s.text_frame.paragraphs:
                     for r in p.runs:
                         if r.font.size and r.font.size.pt < 8:

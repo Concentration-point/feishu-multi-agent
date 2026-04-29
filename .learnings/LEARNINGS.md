@@ -437,3 +437,27 @@ DeckForge/PPT ??????????????? PPT???????????????????????/?????
 - Tags: feishu, image-generation, intent-detection, user-control
 - Pattern-Key: image.generate.only.on.real.intent
 
+
+## [LRN-20260430-001] correction
+
+**Logged**: 2026-04-30T01:40:29.927998
+**Priority**: high
+**Status**: pending
+**Area**: ppt-generation
+
+### Summary
+PPT validate PASS is not enough: user caught monotone all-text slides, formula mojibake, and text overflow.
+
+### Details
+A generated academic PPT passed structural validation but failed visual/usefulness expectations. The deck overused text boxes, lacked paper figures or page-specific visuals, formula-like content rendered poorly, and some text exceeded comfortable layout bounds.
+
+### Suggested Action
+Upgrade PPT SOP/template validation: require visual density checks, per-slide visual anchor (paper figure / generated visual / native diagram), formula-as-image or safe ASCII cards, and stricter text-length/box-density limits. Do not call a PPT final based only on structural validate.
+
+### Metadata
+- Source: user_feedback
+- Related Files: PPT-GENERATION-SOP.md; ppt_project_template/validate.py; deckforge_output/surgical_robot_claims_ppt/build_surgical_robot_ppt.py
+- Tags: ppt, aesthetic, validation, formula, overflow
+- Pattern-Key: ppt.validate_visual_quality
+- Recurrence-Count: 1
+---
