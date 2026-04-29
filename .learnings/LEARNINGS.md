@@ -336,3 +336,26 @@
 - **Commit/PR**: pending
 - **Notes**: 已提升到 IMAGE-GENERATION-SOP 并添加 smoke test。
 ---
+
+## [LRN-20260429-001] correction
+
+**Logged**: 2026-04-29T11:01:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: config
+
+### Summary
+Hermes image generation must use the image_gen backend (`gpt-image-2`), not the chat fallback model.
+
+### Details
+User corrected that image generation should call `gpt-image-2`; adding `gpt-4o-mini` as fallback only helps the main conversation/tool orchestration model and does not define the image generation model. Hermes image-generation selection reads `image_gen.provider` / `image_gen.model` from config and the OpenAI plugin maps `gpt-image-2-low|medium|high` to API model `gpt-image-2`.
+
+### Suggested Action
+When fixing Hermes image failures, separate three layers explicitly: chat/orchestration model, image_gen provider/model, and platform media upload. Configure image_gen separately, e.g. `image_gen.provider: openai`, `image_gen.model: gpt-image-2-medium`.
+
+### Metadata
+- Source: user_feedback
+- Related Files: C:\Users\25723\.hermes\config.yaml, C:\Users\25723\Hermes agent\plugins\image_gen\openai\__init__.py, C:\Users\25723\Hermes agent\agent\image_gen_registry.py
+- Tags: hermes, image-generation, gpt-image-2, config
+
+---
