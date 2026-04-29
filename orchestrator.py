@@ -60,6 +60,9 @@ class Orchestrator:
         "project_manager",
     ]
 
+    # 进程级缓存：「项目交付文档」父节点 token，避免每次重复查找/创建
+    _delivery_parent_token: str = ""
+
     def __init__(self, record_id: str, event_bus: EventBus | None = None):
         self.record_id = record_id
         self._event_bus = event_bus
@@ -984,6 +987,54 @@ class Orchestrator:
         except Exception:
             return "未知客户"
 
+    @staticmethod
+    def _md_to_blocks(text: str) -> list[dict]:
+        """把 LLM 产出的 Markdown 文本转换成飞书文档 block 列表。
+
+        支持：## 标题、### 标题、- 列表、* 列表、--- 分隔线，以及行内 **bold** / *em* / `code` 剥离。
+        """
+        import re
+        blocks: list[dict] = []
+        for line in text.split("\n"):
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith("### "):
+                blocks.append({"type": "heading3", "text": s[4:].strip()})
+            elif s.startswith("## "):
+                blocks.append({"type": "heading2", "text": s[3:].strip()})
+            elif s.startswith("# "):
+                blocks.append({"type": "heading2", "text": s[2:].strip()})
+            elif s.startswith(("- ", "* ", "+ ")):
+                clean = re.sub(r"\*\*(.+?)\*\*", r"\1", s[2:])
+                blocks.append({"type": "bullet", "text": clean.strip()})
+            elif s in ("---", "===", "***"):
+                blocks.append({"type": "divider"})
+            else:
+                clean = re.sub(r"\*\*(.+?)\*\*", r"\1", s)
+                clean = re.sub(r"\*(.+?)\*", r"\1", clean)
+                clean = re.sub(r"`(.+?)`", r"\1", clean)
+                blocks.append({"type": "text", "text": clean})
+        return blocks
+
+    async def _get_delivery_parent_token(self, wiki) -> str:
+        """查找或创建「项目交付文档」父节点，返回 node_token。进程级缓存，单次创建。"""
+        if Orchestrator._delivery_parent_token:
+            return Orchestrator._delivery_parent_token
+
+        parent_title = "项目交付文档"
+        existing = await wiki.find_node_by_title(WIKI_SPACE_ID, parent_title)
+        if existing:
+            Orchestrator._delivery_parent_token = existing["node_token"]
+            return Orchestrator._delivery_parent_token
+
+        # 取空间根 token：顶级节点的 parent_node_token 即空间根
+        root_nodes = await wiki.list_nodes(WIKI_SPACE_ID)
+        space_root_token = root_nodes[0].get("parent_node_token", "") if root_nodes else ""
+        node = await wiki.create_node(WIKI_SPACE_ID, space_root_token, parent_title)
+        Orchestrator._delivery_parent_token = node["node_token"]
+        return Orchestrator._delivery_parent_token
+
     async def _generate_delivery_document(self, project_name: str) -> str | None:
         """流水线完成后，在飞书知识空间自动生成面向客户的交付云文档。
 
@@ -1004,12 +1055,8 @@ class Orchestrator:
         today = datetime.now().strftime("%Y-%m-%d")
         doc_title = f"{project_name}-交付报告-{today}"
 
-        # 创建知识空间节点
-        parent_title = "项目交付文档"
-        from sync.wiki_sync import WikiSyncService
-        sync_svc = WikiSyncService(WIKI_SPACE_ID)
-        parent_node = await sync_svc._ensure_parent_node(parent_title)
-        parent_token = parent_node["node_token"]
+        # 查找或创建「项目交付文档」父节点（进程级缓存，不重复创建）
+        parent_token = await self._get_delivery_parent_token(wiki)
 
         existing = await wiki.find_node_by_title(WIKI_SPACE_ID, doc_title, parent_token)
         if existing:
@@ -1051,19 +1098,13 @@ class Orchestrator:
         # ── 需求理解 ──
         if proj.brief_analysis:
             blocks.append({"type": "heading2", "text": "需求理解"})
-            for para in proj.brief_analysis.split("\n"):
-                para = para.strip()
-                if para:
-                    blocks.append({"type": "text", "text": para})
+            blocks.extend(self._md_to_blocks(proj.brief_analysis))
             blocks.append({"type": "divider"})
 
         # ── 策略思路 ──
         if proj.strategy:
             blocks.append({"type": "heading2", "text": "策略思路"})
-            for para in proj.strategy.split("\n"):
-                para = para.strip()
-                if para:
-                    blocks.append({"type": "text", "text": para})
+            blocks.extend(self._md_to_blocks(proj.strategy))
             blocks.append({"type": "divider"})
 
         # ── 内容清单表格 ──
@@ -1086,10 +1127,7 @@ class Orchestrator:
         for idx, row in enumerate(rows, 1):
             if row.draft:
                 blocks.append({"type": "heading3", "text": f"{idx}. {row.title or '未命名'}"})
-                for para in row.draft.split("\n"):
-                    para = para.strip()
-                    if para:
-                        blocks.append({"type": "text", "text": para})
+                blocks.extend(self._md_to_blocks(row.draft))
 
         if rows:
             blocks.append({"type": "divider"})
@@ -1144,10 +1182,7 @@ class Orchestrator:
         # ── 交付摘要 ──
         if proj.delivery:
             blocks.append({"type": "heading2", "text": "交付总结"})
-            for para in proj.delivery.split("\n"):
-                para = para.strip()
-                if para:
-                    blocks.append({"type": "text", "text": para})
+            blocks.extend(self._md_to_blocks(proj.delivery))
             blocks.append({"type": "divider"})
 
         # ── 署名 ──
