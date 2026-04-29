@@ -183,3 +183,36 @@ When a Hermes tool has both legacy implementation and plugin registry, test the 
 - Tags: hermes, image-generation, plugin-dispatch, gpt-image-2, fal
 
 ---
+
+## [ERR-20260429-003] hermes_luhengcheng_chat_sdk_block
+
+**Logged**: 2026-04-29T12:10:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: provider-transport
+
+### Summary
+Hermes ordinary chat via `custom-api / gpt-5.5` was blocked when using the OpenAI SDK request path, while plain HTTP requests to the same `/chat/completions` endpoint worked.
+
+### Error
+```
+Your request was blocked.
+Timeout value connect was Timeout(...), but it must be an int, float or None.
+API call failed after 3 retries. Expecting value: line 1 column 1 (char 0)
+```
+
+### Fix
+Added a `RequestsOpenAICompatibleClient` for `api.luhengcheng.top` that mimics the small OpenAI Chat Completions response surface Hermes needs, including streaming SSE chunks. `run_agent._create_openai_client()` now uses this requests-backed client for `api.luhengcheng.top`, avoiding the SDK request shape that triggers provider blocking.
+
+### Verification
+- Direct sync + async requests-backed calls returned OK.
+- Streaming path worked.
+- Feishu end-to-end text test `只回复 OK` returned response length 2 with no 401/403/block in logs.
+- Regression command passed: `python -m pytest -o addopts= tests/tools/test_image_generation.py tests/tools/test_image_generation_plugin_dispatch.py tests/agent/test_error_classifier.py -q` → 178 passed.
+
+### Metadata
+- Reproducible: yes
+- Related Files: C:\Users\25723\Hermes agent\agent\auxiliary_client.py, C:\Users\25723\Hermes agent\run_agent.py
+- Tags: hermes, luhengcheng, custom-api, openai-compatible, streaming, requests-transport
+
+---
