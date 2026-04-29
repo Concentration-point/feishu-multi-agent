@@ -247,3 +247,29 @@ Changed `_RequestsChatCompletionsAdapter._stream_chunks()` to iterate raw bytes 
 - Tags: hermes, mojibake, utf8, requests, sse, streaming
 
 ---
+
+## [ERR-20260429-005] hermes_feishu_mojibake_outbound_guard
+
+**Logged**: 2026-04-29T12:35:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: feishu-output
+
+### Summary
+Hermes sent a reply to Feishu as mojibake (`ææ¯...`) at 12:12. The requests streaming decoder was fixed earlier, but an outbound Feishu guard was added so already-mojibaked provider text is repaired before send.
+
+### Fix
+Added `_repair_utf8_mojibake()` in `gateway/platforms/feishu.py` and applied it in `FeishuPlatformAdapter.format_message()`. The repair tries Latin-1 bytes -> UTF-8 only when mojibake marker score clearly decreases, leaving normal text untouched.
+
+### Verification
+- Unit-style direct assertion repaired UTF-8-as-Latin-1 sample for `我是 Clawd，你的 Hermes 助理。`.
+- Regression command passed earlier in this session: 178 passed.
+- Gateway restarted.
+- Live text endpoint is currently unavailable due Cloudflare 530 tunnel_error, so end-to-end model reply retest must wait until api.luhengcheng.top recovers.
+
+### Metadata
+- Reproducible: yes
+- Related Files: C:\Users\25723\Hermes agent\gateway\platforms\feishu.py
+- Tags: hermes, feishu, mojibake, utf8, outbound-guard
+
+---
