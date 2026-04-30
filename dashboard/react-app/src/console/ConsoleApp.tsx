@@ -18,6 +18,7 @@ import { ReviewerView } from "./views/ReviewerView";
 import { PMView } from "./views/PMView";
 import { DAGView } from "./views/DAGView";
 import { ToolHealthView } from "./views/ToolHealthView";
+import { CostBanner } from "./components/CostBanner";
 import { useConsoleStore } from "./useConsoleStore";
 import type { AgentSession, RoleId } from "./types";
 
@@ -70,9 +71,12 @@ export function ConsoleApp({ session, oldPanel, isLive, isWaiting, onShowPicker 
             <ToolHealthView />
           </div>
         ) : graphMode ? (
-          /* DAG 全屏画布：不带 Sidebar，铺满内容区 */
-          <div style={{ position: "relative", overflow: "hidden", minHeight: 0 }}>
-            <DAGView session={session} />
+          /* DAG 全屏画布：token 成本条 + DAG 画布，铺满内容区 */
+          <div style={{ display: "flex", flexDirection: "column", overflow: "hidden", minHeight: 0 }}>
+            <CostBanner />
+            <div style={{ flex: 1, position: "relative", overflow: "hidden", minHeight: 0 }}>
+              <DAGView session={session} />
+            </div>
           </div>
         ) : (
           <div
