@@ -608,6 +608,8 @@ class BaseAgent:
                 except json.JSONDecodeError:
                     fn_args = {}
                 result = await self._registry.call_tool(fn_name, fn_args, tool_context)
+                from memory.cost_tracker import cost_tracker as _ct
+                _ct.record_tool_call(self.record_id, self.role_id, fn_name, iteration)
                 tool_calls.append(
                     {
                         "tool_name": fn_name,
@@ -779,6 +781,9 @@ class BaseAgent:
                     result = await self._registry.call_tool(
                         fn_name, fn_args, context
                     )
+
+                    from memory.cost_tracker import cost_tracker as _ct
+                    _ct.record_tool_call(self.record_id, self.role_id, fn_name, iteration)
 
                     self._publish("tool.returned", {
                         "tool_name": fn_name,
