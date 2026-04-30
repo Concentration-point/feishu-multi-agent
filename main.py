@@ -261,11 +261,23 @@ async def healthz() -> dict[str, str]:
 
 @app.get("/dashboard")
 async def dashboard_page():
-    """返回 Dashboard 主页面。"""
+    """返回 Dashboard 主页面。
+
+    强制 no-cache 防止浏览器持有旧 index.html：
+      - hash 文件 (assets/index-XXXX.js) 由 vite 输出含哈希文件名，URL 变了浏览器自动拉新，可长期缓存
+      - 但 index.html 文件名固定，必须每次拉最新才能拿到新的 hash 引用，否则页面会卡在旧 bundle
+    """
     index_path = _DASHBOARD_DIR / "index.html"
     if not index_path.exists():
         raise HTTPException(status_code=404, detail="dashboard not built")
-    return HTMLResponse(index_path.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        index_path.read_text(encoding="utf-8"),
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.get("/api/pipelines")
@@ -289,6 +301,19 @@ async def get_run(record_id: str):
         return JSONResponse({"ok": True, "has_run": False, "events": []})
     events = EventBus.load_run(record_id)
     return JSONResponse({"ok": True, "has_run": True, "events": events})
+
+
+@app.get("/api/costs")
+async def get_costs(record_id: str | None = None):
+    """查询 LLM 调用 token 成本统计。
+
+    - 无 record_id：返回所有项目聚合，按总 token 降序
+    - 有 record_id：返回指定项目的成本摘要 + by_role 明细
+    """
+    from memory.cost_tracker import cost_tracker
+    if record_id:
+        return JSONResponse({"ok": True, "summary": cost_tracker.get_project_summary(record_id)})
+    return JSONResponse({"ok": True, "summaries": cost_tracker.get_all_summaries()})
 
 
 @app.get("/api/records")
@@ -536,11 +561,16 @@ async def pipeline_history(record_id: str):
 
 
 @app.get("/api/tool-stats")
-async def tool_stats(limit: int = 50, since_hours: float = 0):
+async def tool_stats(
+    limit: int = 50,
+    since_hours: float = 0,
+    record_id: str = "",
+):
     """读取 logs/tool_calls.jsonl，返回工具调用统计 + 最近失败记录。
 
     - limit: 最近失败记录条数上限（默认 50）
     - since_hours: 仅统计最近 N 小时内的记录（0=全量历史）
+    - record_id: 仅统计指定 record_id 的调用（空=全部 record）；与 since_hours 可叠加
     """
     import json as _json
     from collections import defaultdict
@@ -559,6 +589,11 @@ async def tool_stats(limit: int = 50, since_hours: float = 0):
                 records.append(_json.loads(line))
             except Exception:
                 continue
+
+    # 按 record_id 过滤（"本次运行"视图）—— 优先级最高，能极大缩小数据集
+    target_rid = (record_id or "").strip()
+    if target_rid:
+        records = [r for r in records if r.get("record_id") == target_rid]
 
     # 按时间窗口过滤（since_hours > 0 时启用）
     if since_hours > 0:
@@ -626,6 +661,7 @@ async def tool_stats(limit: int = 50, since_hours: float = 0):
         "ok": True,
         "total_records": len(records),
         "since_hours": since_hours,
+        "record_id": target_rid,  # 回显前端传入的过滤条件，便于一致性校验
         "oldest_ts": oldest_ts,
         "newest_ts": newest_ts,
         "tool_stats": tool_list,

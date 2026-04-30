@@ -1119,7 +1119,19 @@ class BaseAgent:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                return await self._llm.chat.completions.create(**kwargs)
+                response = await self._llm.chat.completions.create(**kwargs)
+                if response.usage:
+                    from memory.cost_tracker import cost_tracker
+                    cost_tracker.record(
+                        record_id=self.record_id,
+                        role_id=self.role_id,
+                        stage=stage,
+                        model=LLM_MODEL,
+                        prompt_tokens=response.usage.prompt_tokens or 0,
+                        completion_tokens=response.usage.completion_tokens or 0,
+                        iteration=iteration,
+                    )
+                return response
             except (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError) as exc:
                 is_last = attempt == max_attempts
                 is_rate_limit = isinstance(exc, RateLimitError)
