@@ -9,8 +9,11 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 _LOGS_DIR = Path(__file__).parent.parent / "logs"
 _JSONL_PATH = _LOGS_DIR / "tool_calls.jsonl"
@@ -31,6 +34,7 @@ class CostTracker:
 
     def __init__(self) -> None:
         self._stats: dict[str, dict] = {}
+        self._load_from_jsonl()
 
     # ── 内部辅助 ────────────────────────────────────────────────────
 
@@ -161,6 +165,77 @@ class CostTracker:
             "total_tokens": p["total_tokens"],
             "by_role": by_role,
         }
+
+    def _load_from_jsonl(self) -> None:
+        """从 JSONL 文件恢复历史数据（进程重启后持久化恢复）。
+
+        - type=llm  → 重建 token 聚合 + llm_calls 明细列表
+        - type=tool → 重建 tool_calls 计数
+        - 无 type 字段（旧格式）→ 视为 llm
+        加载失败只打 WARNING，不阻断启动。
+        """
+        if not _JSONL_PATH.exists():
+            return
+        loaded = 0
+        try:
+            with _JSONL_PATH.open("r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    record_id = entry.get("record_id", "")
+                    role_id   = entry.get("role_id", "")
+                    if not record_id or not role_id:
+                        continue
+
+                    entry_type = entry.get("type", "llm")  # 旧格式无 type → 默认 llm
+
+                    if entry_type == "llm":
+                        pt    = entry.get("prompt_tokens", 0)
+                        ct    = entry.get("completion_tokens", 0)
+                        total = entry.get("total_tokens", pt + ct)
+                        p = self._project(record_id)
+                        p["prompt_tokens"]     += pt
+                        p["completion_tokens"] += ct
+                        p["total_tokens"]      += total
+                        p["calls"]             += 1
+                        r = self._role(record_id, role_id)
+                        r["prompt_tokens"]     += pt
+                        r["completion_tokens"] += ct
+                        r["total_tokens"]      += total
+                        r["calls"]             += 1
+                        r["llm_calls"].append({
+                            "ts":               entry.get("ts", 0),
+                            "stage":            entry.get("stage", ""),
+                            "iteration":        entry.get("iteration"),
+                            "prompt_tokens":    pt,
+                            "completion_tokens": ct,
+                            "total_tokens":     total,
+                        })
+
+                    elif entry_type == "tool":
+                        tool_name = entry.get("tool_name", "")
+                        if not tool_name:
+                            continue
+                        r = self._role(record_id, role_id)
+                        r["tool_calls"][tool_name] = r["tool_calls"].get(tool_name, 0) + 1
+
+                    loaded += 1
+
+        except Exception as e:
+            logger.warning("cost_tracker JSONL 加载失败: %s", e)
+            return
+
+        if loaded:
+            logger.info(
+                "cost_tracker 从 JSONL 恢复 %d 条记录，涵盖 %d 个项目",
+                loaded, len(self._stats),
+            )
 
     def get_all_summaries(self) -> list[dict]:
         """返回所有项目摘要（不含 llm_calls 明细，减少响应体积）。"""
