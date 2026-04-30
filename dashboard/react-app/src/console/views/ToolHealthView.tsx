@@ -1,9 +1,13 @@
 /**
  * ToolHealthView · 工具健康监控面板
  *
- * 数据来源：GET /api/tool-stats → logs/tool_calls.jsonl
+ * 双视图模式：
+ *   - all          : 全局视图（跨所有 record 的累计统计 + 时间窗口过滤）
+ *   - current_run  : 本次运行（绑定 usePipelineStore.recordId，仅看本次项目的工具调用）
+ *
+ * 数据来源：GET /api/tool-stats?record_id=&since_hours=  → logs/tool_calls.jsonl
  * 展示：
- *   - 顶部摘要卡片（总调用、成功率、最慢工具、失败次数）
+ *   - 顶部模式切换 + 摘要卡片（总调用、成功率、最慢工具、失败次数）
  *   - 工具健康卡片列表（成功率进度条、avg_ms、调用量）
  *   - 最近失败记录表（tool / error / role / record_id / duration / 时间）
  */
@@ -12,8 +16,9 @@ import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ShieldCheck, ShieldAlert, RefreshCw, Clock, Zap,
-  AlertTriangle, CheckCircle, XCircle, Activity
+  AlertTriangle, CheckCircle, XCircle, Activity, PlayCircle, Globe2
 } from "lucide-react";
+import { usePipelineStore } from "../../stores/usePipelineStore";
 
 interface ToolStat {
   tool: string;
@@ -245,18 +250,41 @@ function FailureRow({ rec, idx }: { rec: FailureRecord; idx: number }) {
   );
 }
 
+type ViewMode = "all" | "current_run";
+
 export function ToolHealthView() {
   const [data, setData] = useState<StatsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [sinceHours, setSinceHours] = useState(0); // 0 = 全量历史
+  const [viewMode, setViewMode] = useState<ViewMode>("all");
 
-  const fetchStats = useCallback(async (hours = sinceHours) => {
+  // 当前选中的 record（在主面板由 RecordPicker 设置），"本次运行" 模式下消费它
+  const currentRecordId = usePipelineStore((s) => s.recordId);
+  const currentProject = usePipelineStore((s) => s.projectTitle);
+
+  // "本次运行" 模式但未选项目时，无法发起请求
+  const isRunModeBlocked = viewMode === "current_run" && !currentRecordId;
+
+  const fetchStats = useCallback(async () => {
+    if (isRunModeBlocked) {
+      // 跳过请求，但清空旧数据避免误读
+      setData(null);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/tool-stats?limit=50&since_hours=${hours}`);
+      // "本次运行" 模式不传 since_hours（无意义）；全局视图按用户选的窗口
+      const params = new URLSearchParams({ limit: "50" });
+      if (viewMode === "current_run") {
+        params.set("record_id", currentRecordId);
+      } else {
+        params.set("since_hours", String(sinceHours));
+      }
+      const res = await fetch(`/api/tool-stats?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       setData(json);
@@ -266,13 +294,14 @@ export function ToolHealthView() {
     } finally {
       setLoading(false);
     }
-  }, [sinceHours]);
+  }, [sinceHours, viewMode, currentRecordId, isRunModeBlocked]);
 
   useEffect(() => {
-    fetchStats(sinceHours);
-    const timer = setInterval(() => fetchStats(sinceHours), 30000);
+    fetchStats();
+    // "本次运行" 模式下也保持 30s 刷新（流水线进行中可看到工具调用增长）
+    const timer = setInterval(() => fetchStats(), 30000);
     return () => clearInterval(timer);
-  }, [fetchStats, sinceHours]);
+  }, [fetchStats]);
 
   // 汇总指标
   const totalCalls = data?.total_records ?? 0;
@@ -307,10 +336,32 @@ export function ToolHealthView() {
               ? <ShieldCheck size={22} color="var(--color-accent)" />
               : <ShieldAlert size={22} color={totalFail > 0 ? "var(--color-danger)" : "var(--color-warn)"} />}
             <div>
-              <div style={{ fontSize: "18px", fontWeight: 700, color: "var(--color-text-1)" }}>工具健康监控</div>
+              <div style={{ fontSize: "18px", fontWeight: 700, color: "var(--color-text-1)" }}>
+                工具健康监控
+                {viewMode === "current_run" && (
+                  <span style={{
+                    marginLeft: "10px",
+                    fontSize: "12px",
+                    fontFamily: "var(--font-mono)",
+                    color: "var(--color-info)",
+                    fontWeight: 500,
+                    padding: "2px 8px",
+                    borderRadius: "3px",
+                    background: "rgba(103,232,249,.08)",
+                    border: "1px solid rgba(103,232,249,.25)",
+                    verticalAlign: "middle",
+                  }}>
+                    本次运行 · {currentRecordId ? currentRecordId.slice(-10) : "未选项目"}
+                  </span>
+                )}
+              </div>
               <div style={{ fontSize: "11.5px", color: "var(--color-text-3)", marginTop: "3px" }}>
-                logs/tool_calls.jsonl · append-only 全局日志
-                {data?.oldest_ts && (
+                {viewMode === "current_run" ? (
+                  <>仅本次运行的工具调用 · {currentProject || "未选项目"}</>
+                ) : (
+                  <>logs/tool_calls.jsonl · append-only 全局日志</>
+                )}
+                {viewMode === "all" && data?.oldest_ts && (
                   <> · <span style={{ fontFamily: "var(--font-mono)" }}>
                     {new Date(data.oldest_ts).toLocaleDateString("zh-CN")}
                   </span> 起</>
@@ -320,9 +371,53 @@ export function ToolHealthView() {
             </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            {/* 时间范围选择器 */}
-            {([
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            {/* 视图模式切换 */}
+            <div style={{
+              display: "inline-flex",
+              padding: "3px",
+              borderRadius: "7px",
+              background: "var(--color-bg-2)",
+              border: "1px solid var(--color-border)",
+            }}>
+              {([
+                ["all",         "全局视图",   <Globe2 size={12} key="g" />] as const,
+                ["current_run", "本次运行",   <PlayCircle size={12} key="r" />] as const,
+              ]).map(([mode, label, icon]) => (
+                <button
+                  key={mode}
+                  onClick={() => {
+                    if (mode === viewMode) return;
+                    // 切模式时立即清空旧数据，让用户视觉上看到切换发生（避免 fetch 期间停留在旧数据让人以为"没变化"）
+                    setData(null);
+                    setLoading(true);
+                    setViewMode(mode as ViewMode);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "5px",
+                    padding: "5px 12px",
+                    borderRadius: "5px",
+                    fontSize: "11.5px",
+                    fontFamily: "var(--font-mono)",
+                    color: viewMode === mode ? "var(--color-text-1)" : "var(--color-text-3)",
+                    background: viewMode === mode ? "var(--color-bg-0)" : "transparent",
+                    border: viewMode === mode ? "1px solid var(--color-border)" : "1px solid transparent",
+                    cursor: "pointer",
+                    transition: "all .15s",
+                  }}
+                >
+                  {icon}
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <span aria-hidden style={{ width: 1, height: 16, background: "var(--color-border)" }} />
+
+            {/* 时间范围选择器（仅全局视图有意义；本次运行模式下隐藏） */}
+            {viewMode === "all" && ([
               [0,   "全量历史"],
               [24,  "近 24h"],
               [168, "近 7 天"],
@@ -346,18 +441,18 @@ export function ToolHealthView() {
               </button>
             ))}
 
-            <span aria-hidden style={{ width: 1, height: 16, background: "var(--color-border)" }} />
+            {viewMode === "all" && <span aria-hidden style={{ width: 1, height: 16, background: "var(--color-border)" }} />}
 
             <button
-              onClick={() => fetchStats(sinceHours)}
-              disabled={loading}
+              onClick={() => fetchStats()}
+              disabled={loading || isRunModeBlocked}
               style={{
                 display: "flex", alignItems: "center", gap: "6px",
                 padding: "7px 14px", borderRadius: "6px", fontSize: "12px",
-                color: loading ? "var(--color-text-4)" : "var(--color-text-2)",
+                color: (loading || isRunModeBlocked) ? "var(--color-text-4)" : "var(--color-text-2)",
                 background: "var(--color-bg-2)",
                 border: "1px solid var(--color-border)",
-                cursor: loading ? "not-allowed" : "pointer",
+                cursor: (loading || isRunModeBlocked) ? "not-allowed" : "pointer",
               }}
             >
               <motion.span
@@ -396,6 +491,48 @@ export function ToolHealthView() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {/* "本次运行" 模式但未选项目 → 友好提示，不渲染下方所有数据卡片 */}
+        {isRunModeBlocked ? (
+          <div style={{
+            padding: "60px 40px",
+            textAlign: "center",
+            color: "var(--color-text-3)",
+            background: "var(--color-bg-1)",
+            border: "1px dashed var(--color-border)",
+            borderRadius: "10px",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "14px",
+          }}>
+            <PlayCircle size={36} style={{ opacity: 0.5, color: "var(--color-info)" }} />
+            <div style={{ fontSize: "15px", color: "var(--color-text-2)", fontWeight: 500 }}>
+              当前未选中任何项目运行
+            </div>
+            <div style={{ fontSize: "12.5px", lineHeight: 1.7 }}>
+              「本次运行」视图绑定主面板选中的项目（record_id）。<br />
+              请先回到主面板选择或触发一个项目，再切回此页查看其工具调用监控。<br />
+              或切换到「全局视图」查看所有运行的累计统计。
+            </div>
+            <button
+              onClick={() => setViewMode("all")}
+              style={{
+                marginTop: "8px",
+                padding: "7px 18px",
+                fontSize: "12px",
+                fontFamily: "var(--font-mono)",
+                color: "var(--color-text-2)",
+                background: "var(--color-bg-2)",
+                border: "1px solid var(--color-border)",
+                borderRadius: "6px",
+                cursor: "pointer",
+              }}
+            >
+              切到全局视图
+            </button>
+          </div>
+        ) : <>
 
         {/* 摘要卡片 */}
         <div style={{ display: "flex", gap: "12px", flexWrap: "wrap" }}>
@@ -555,7 +692,7 @@ export function ToolHealthView() {
           </section>
         )}
 
-        {/* 空数据提示 */}
+        {/* 空数据提示（按视图模式区分文案） */}
         {!loading && !error && data?.total_records === 0 && (
           <div style={{
             padding: "60px 40px",
@@ -567,13 +704,24 @@ export function ToolHealthView() {
             gap: "14px",
           }}>
             <Activity size={36} style={{ opacity: 0.4 }} />
-            <div style={{ fontSize: "15px", color: "var(--color-text-2)" }}>暂无工具调用数据</div>
+            <div style={{ fontSize: "15px", color: "var(--color-text-2)" }}>
+              {viewMode === "current_run"
+                ? "本次运行暂无工具调用记录"
+                : "暂无工具调用数据"}
+            </div>
             <div style={{ fontSize: "12.5px" }}>
-              先跑一次 Demo（<code style={{ fontFamily: "var(--font-mono)", background: "var(--color-bg-2)", padding: "2px 6px", borderRadius: "3px" }}>python demo/run_demo.py --scene 电商大促</code>）<br />
-              数据会自动写入 logs/tool_calls.jsonl
+              {viewMode === "current_run" ? (
+                <>当前项目 <code style={{ fontFamily: "var(--font-mono)" }}>{currentRecordId.slice(-12)}</code> 还未触发任何工具调用，<br />
+                等流水线启动后会自动出现，或返回主面板触发执行。</>
+              ) : (
+                <>先跑一次 Demo（<code style={{ fontFamily: "var(--font-mono)", background: "var(--color-bg-2)", padding: "2px 6px", borderRadius: "3px" }}>python demo/run_demo.py --scene 电商大促</code>）<br />
+                数据会自动写入 logs/tool_calls.jsonl</>
+              )}
             </div>
           </div>
         )}
+
+        </>}
 
       </div>
     </div>

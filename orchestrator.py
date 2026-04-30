@@ -28,7 +28,9 @@ from config import (
     ROUTE_TABLE,
     ROUTE_TERMINAL_STATUSES,
     STATUS_DONE,
+    STATUS_PENDING,
     STATUS_PENDING_REVIEW,
+    STATUS_REJECTED,
     ROLE_NAMES,
     WIKI_SPACE_ID,
 )
@@ -88,13 +90,38 @@ class Orchestrator:
             pass
 
     async def _read_current_status(self) -> str:
-        """从 Bitable 读取项目当前状态，异常时返回空字符串。"""
+        """从 Bitable 读取项目当前状态，空状态自动初始化为「待处理」。
+
+        区分两种"无状态"：
+          - API 异常导致读不到 → 返回 ""，调用方按未知状态处理
+          - 读到了但字段为空 → 兜底回写「待处理」并返回，避免动态路由空转直接退出
+        """
         try:
             proj = await self._pm.load()
-            return (proj.status or "").strip()
+            status = (proj.status or "").strip()
+            if not status:
+                return await self._initialize_pending_status()
+            return status
         except Exception as exc:
             logger.warning("动态路由：读取项目状态失败: %s", exc)
             return ""
+
+    async def _initialize_pending_status(self) -> str:
+        """空状态兜底：回写「待处理」到 Bitable 并返回。
+
+        回写失败仅记录警告，仍返回 STATUS_PENDING——动态路由能正常推进比 Bitable 同步更优先。
+        下次 _read_current_status 还会再次尝试初始化，最终一致。
+        """
+        print(f"[Orchestrator] 项目状态为空，自动初始化为「{STATUS_PENDING}」")
+        try:
+            await self._pm.update_status(STATUS_PENDING)
+        except Exception as exc:
+            logger.warning("初始化空状态为「%s」失败: %s", STATUS_PENDING, exc)
+            print(
+                f"[Orchestrator] 警告: 空状态回写失败（不阻断主流程）: "
+                f"{type(exc).__name__}: {exc}"
+            )
+        return STATUS_PENDING
 
     def _resolve_next_role(self, status: str) -> str | None:
         """根据当前项目状态查路由表，返回下一个角色 ID 或 None（终止）。
@@ -118,6 +145,10 @@ class Orchestrator:
         project_name = proj.client_name or "未知客户"
         brief_summary = (proj.brief or "")[:200]
         current_status = (proj.status or "").strip()
+
+        # 入口兜底：空状态视为新项目，初始化为「待处理」让动态路由能正常进入 AM
+        if not current_status:
+            current_status = await self._initialize_pending_status()
 
         self._publish("pipeline.started", {
             "project_name": project_name,
@@ -718,6 +749,29 @@ class Orchestrator:
 
         # timeout
         await self._pm.write_review_status(REVIEW_STATUS_TIMEOUT)
+
+        # 第二次超时 → 终止项目
+        if prev_send_count >= 1:
+            try:
+                await self._pm.update_status(STATUS_REJECTED)
+            except Exception as exc:
+                print(f"[Orchestrator] 警告: 切换到已驳回状态失败: {exc}")
+            await self._pm.clear_pending_state()
+            self._publish("human_review.resolved", {
+                "outcome": "timeout_final", "feedback": feedback, "resumed": resumed,
+            })
+            await self._broadcast(
+                title="人审连续超时，项目已终止",
+                content=(
+                    f"本项目已连续两次等待人审超过 {HUMAN_REVIEW_TIMEOUT} 秒上限，\n"
+                    f"系统自动将项目标记为「已驳回」并终止流程。\n"
+                    f"如需重新启动，请在多维表格将状态手动改为「待处理」后重新触发。"
+                ),
+                color="red",
+            )
+            return "timeout_final"
+
+        # 第一次超时 → 挂起，等待下次触发恢复
         try:
             await self._pm.update_status(STATUS_PENDING_REVIEW)
         except Exception as exc:
@@ -730,7 +784,8 @@ class Orchestrator:
             content=(
                 f"本轮等待审核超过 {HUMAN_REVIEW_TIMEOUT} 秒上限。\n"
                 f"项目数据已完整保留，status=「待人审」。\n"
-                f"下次触发同一 record_id，将直接恢复到人审环节，无需重跑客户经理。"
+                f"下次触发同一 record_id，将直接恢复到人审环节，无需重跑客户经理。\n"
+                f"⚠️ 如下次仍超时，项目将被自动终止。"
             ),
             color="yellow",
         )
