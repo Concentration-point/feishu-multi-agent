@@ -75,6 +75,8 @@ class Orchestrator:
         self._review_threshold = REVIEW_PASS_THRESHOLD_DEFAULT
         self._review_red_flag = ""
         self._max_route_steps = MAX_ROUTE_STEPS
+        # 死循环防护：同状态连续 N 次后强制 halt，可在测试中覆写
+        self._no_progress_limit = 2
         self._pm = ProjectMemory(record_id)
 
     def _publish(self, event_type: str, payload: dict | None = None, *, agent_role: str = "", agent_name: str = "") -> None:
@@ -162,6 +164,10 @@ class Orchestrator:
         # ── 动态路由主循环 ──
         step = 0
         prev_role: str = ""
+        # 死循环防护：同状态连续 N 次执行同角色后仍未推进 → 强制 halt
+        # 触发场景：PM 拒绝排期但不更新状态、reviewer 漏写字段、任何 Agent 安全退出但状态机未推进
+        no_progress_count = 0
+        NO_PROGRESS_LIMIT = self._no_progress_limit
 
         # 入口：状态为「待人审」 → 恢复人审门禁
         if current_status == STATUS_PENDING_REVIEW:
@@ -210,6 +216,7 @@ class Orchestrator:
                 current_status = await self._read_current_status()
                 continue
 
+            status_at_entry = current_status  # 记录本次执行前的状态，用于死循环检测
             step += 1
             role_id = next_role
             role_name = ROLE_NAMES.get(role_id, role_id)
@@ -227,6 +234,27 @@ class Orchestrator:
             prev_role = role_id
 
             print(f"[Orchestrator] 动态路由: status='{current_status}' → {role_id} (step {step})")
+
+            # ── 交接校验：上游必填字段检查 ──
+            if role_id in ("strategist", "copywriter", "reviewer", "project_manager"):
+                handoff_ok, handoff_reason = await self._validate_handoff(role_id, project_name)
+                if not handoff_ok:
+                    logger.error(
+                        "交接校验失败: %s → %s: %s", current_status, role_id, handoff_reason,
+                    )
+                    await self._broadcast(
+                        title="流水线异常 · 交接校验失败",
+                        content=(
+                            f"角色 **{role_name}** 无法启动\n"
+                            f"原因：{handoff_reason}\n\n"
+                            "请检查上游 Agent 产出是否完整，或人工介入修复数据后重新触发。"
+                        ),
+                        color="red",
+                    )
+                    await self._finalize_pipeline_halted(
+                        project_name, f"handoff_failed:{role_id}",
+                    )
+                    return self.stage_results
 
             # ── 执行阶段（保留 copywriter fan-out 特殊路径）──
             if role_id == "copywriter":
@@ -303,6 +331,34 @@ class Orchestrator:
 
             # ── 路由决策：读取最新状态，进入下一轮 ──
             current_status = await self._read_current_status()
+
+            # ── 死循环防护：状态未推进则计数，连续超阈值即 halt ──
+            if current_status == status_at_entry:
+                no_progress_count += 1
+                print(
+                    f"[Orchestrator] 死循环防护: status='{current_status}' 经 {role_id} 后未推进 "
+                    f"({no_progress_count}/{NO_PROGRESS_LIMIT})"
+                )
+                if no_progress_count >= NO_PROGRESS_LIMIT:
+                    print(
+                        f"[Orchestrator] 死循环防护触发: status='{current_status}' 连续 "
+                        f"{NO_PROGRESS_LIMIT} 次执行 {role_id} 后状态未推进，强制 halt"
+                    )
+                    await self._broadcast(
+                        title="流水线异常 · 强制中止",
+                        content=(
+                            f"项目 **{project_name}** 卡在状态 `{current_status}`\n"
+                            f"连续 {NO_PROGRESS_LIMIT} 次执行 **{role_name}** 后状态未推进\n\n"
+                            f"已强制中止以避免死循环，请人工介入排查上游产出"
+                        ),
+                        color="red",
+                    )
+                    await self._finalize_pipeline_halted(
+                        project_name, f"no_progress:{current_status}"
+                    )
+                    return self.stage_results
+            else:
+                no_progress_count = 0
 
         else:
             print(f"[Orchestrator] 警告: 动态路由超出最大步数 {self._max_route_steps}，强制终止")
@@ -1425,6 +1481,52 @@ class Orchestrator:
         score += 0.2 * (1.0 if no_rework else 0.0)
         score += 0.1 * (1.0 if knowledge_cited else 0.0)
         return round(score, 2)
+
+    async def _validate_handoff(self, role_id: str, project_name: str) -> tuple[bool, str]:
+        """交接校验：启动下游 Agent 前检查上游必填字段非空。
+
+        返回 (True, "") 表示可以启动；(False, reason) 表示上游产出缺失，不应启动。
+        读取失败时不阻塞（返回 True），让 Agent 自己报错。
+        """
+        try:
+            proj = await self._pm.load()
+        except Exception as exc:
+            logger.warning("交接校验：读取项目失败，跳过校验: %s", exc)
+            return True, ""
+
+        if role_id == "strategist":
+            if not (proj.brief_analysis or "").strip():
+                return False, "策略师启动前必须有 brief_analysis（客户经理产出为空）"
+
+        elif role_id == "copywriter":
+            if not (proj.strategy or "").strip():
+                return False, "文案启动前必须有 strategy（策略师产出为空）"
+            try:
+                rows = await ContentMemory().list_by_project(proj.client_name or project_name)
+                if not rows:
+                    return False, "文案启动前内容排期表必须有行（策略师未创建内容行）"
+            except Exception as exc:
+                logger.warning("交接校验：读取内容行失败，跳过行数检查: %s", exc)
+
+        elif role_id == "reviewer":
+            try:
+                rows = await ContentMemory().list_by_project(proj.client_name or project_name)
+                if not rows:
+                    return False, "审核启动前内容排期表必须有行（策略师未创建或文案未完成任何行）"
+                empty = [r for r in rows if not (r.draft or "").strip()]
+                if empty:
+                    return False, (
+                        f"审核启动前所有内容行必须有成稿"
+                        f"（{len(empty)}/{len(rows)} 条 draft 为空）"
+                    )
+            except Exception as exc:
+                logger.warning("交接校验：读取内容行失败，跳过成稿检查: %s", exc)
+
+        elif role_id == "project_manager":
+            if not (proj.review_summary or "").strip():
+                return False, "项目经理启动前必须有 review_summary（审核产出为空）"
+
+        return True, ""
 
     async def _broadcast(self, title: str, content: str, color: str) -> None:
         try:

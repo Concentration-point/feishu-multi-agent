@@ -19,7 +19,10 @@ async def test_reviewer_soul_runs_review_with_mocked_rule_lookup(
             "验证审核 agent 不依赖飞书/内容表/流水线状态",
         ],
     )
-    registry = FakeToolRegistry({"search_knowledge": "absolute wording is forbidden"})
+    registry = FakeToolRegistry({
+        "search_knowledge": "absolute wording is forbidden",
+        "submit_review": "审核结论已写回: status=需修改，维度=[banned_words:✗、brand_tone:✓、platform_spec:✓、dept_style:✓、fact_check:✓]",
+    })
     agent = make_agent("reviewer", registry=registry)
     scripted_llm(
         agent,
@@ -31,6 +34,31 @@ async def test_reviewer_soul_runs_review_with_mocked_rule_lookup(
                         tool_call(
                             "search_knowledge",
                             {"keywords": ["forbidden words", "platform rules"]},
+                            call_id="call_1",
+                        )
+                    ],
+                )
+            ),
+            fake_response(
+                FakeMessage(
+                    content="submitting review result",
+                    tool_calls=[
+                        tool_call(
+                            "submit_review",
+                            {
+                                "content_record_id": "rec_content_1",
+                                "status": "需修改",
+                                "feedback": "Contains absolute wording 'best product' — remove or replace.",
+                                "violated_rules": ["absolute wording: best"],
+                                "dimensions": {
+                                    "banned_words": "不通过",
+                                    "brand_tone": "通过",
+                                    "platform_spec": "通过",
+                                    "dept_style": "通过",
+                                    "fact_check": "通过",
+                                },
+                            },
+                            call_id="call_2",
                         )
                     ],
                 )
@@ -50,6 +78,7 @@ async def test_reviewer_soul_runs_review_with_mocked_rule_lookup(
     assert result.missing_required_tools == []
     assert registry.calls[0]["tool_name"] == "search_knowledge"
     assert registry.calls[0]["role_id"] == "reviewer"
+    assert registry.calls[1]["tool_name"] == "submit_review"
 
 
 @pytest.mark.asyncio
@@ -75,4 +104,5 @@ async def test_reviewer_unit_result_exposes_missing_rule_lookup(
     )
 
     assert result.output == "Review passed"
-    assert result.missing_required_tools == ["search_knowledge"]
+    # reviewer 现在要求同时调用 search_knowledge 和 submit_review
+    assert set(result.missing_required_tools) == {"search_knowledge", "submit_review"}

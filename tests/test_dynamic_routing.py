@@ -210,6 +210,8 @@ async def test_dynamic_routing_full_sequence():
         orch._get_review_red_flag = _fake_red_flag
         orch._handle_reviewer_retries = _noop_retries
         orch._ensure_copywriter_drafts = lambda name: _noop_drafts(name)
+        # 路由测试只验证调度顺序，不测交接校验逻辑（handoff 有独立测试）
+        orch._validate_handoff = AsyncMock(return_value=(True, ""))
 
         results = await orch.run()
 
@@ -251,11 +253,13 @@ async def test_dynamic_routing_max_steps_guard():
          patch("orchestrator.ProjectMemory", stuck_prog), \
          patch("orchestrator.ContentMemory", _FakeContentMemory):
         orch = Orchestrator(record_id="rec_stuck")
-        orch._max_route_steps = 3  # 降低上限加速测试
+        orch._max_route_steps = 3     # 降低上限加速测试
+        orch._no_progress_limit = 10  # 允许 max_route_steps 先触发（隔离两个保护机制）
         orch._get_review_threshold = _fake_threshold
         orch._get_review_pass_rate = _fake_pass_rate
         orch._reconcile_review_pass_rate = _fake_reconcile
         orch._get_project_review_status = _fake_review_status
+        orch._validate_handoff = AsyncMock(return_value=(True, ""))
 
         results = await orch.run()
 
@@ -307,6 +311,7 @@ async def test_dynamic_routing_starts_from_midway_status():
         orch._get_project_review_status = _fake_review_status
         orch._handle_reviewer_retries = _noop_retries
         orch._ensure_copywriter_drafts = lambda name: _noop_drafts(name)
+        orch._validate_handoff = AsyncMock(return_value=(True, ""))
 
         results = await orch.run()
 

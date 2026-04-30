@@ -134,14 +134,20 @@ _ROLE_REFLECT_PROMPTS: dict[str, str] = {
 }
 
 # ── 角色必调工具（代码级硬约束，prompt 偏航时兜底）──
-# 如果 ReAct 结束后这些工具未被调用，会注入警告到最终输出
+# 如果 ReAct 结束后这些工具未被调用，post-validation 会注入指令要求 LLM 补全
 _REQUIRED_TOOL_CALLS: dict[str, list[str]] = {
     # account_manager 的人审已改由 Orchestrator 门禁驱动，不再依赖 Agent 自调工具
     # 文案走「对标 + 规则」双轨：search_reference 拿爆款套路，
     # search_knowledge 查禁用词/平台规范，二者缺一不可
     "copywriter": ["search_reference", "search_knowledge"],
-    "reviewer": ["search_knowledge"],
+    # reviewer 必须用 submit_review 写回审核结论（结构化五维校验），
+    # 同时必须调 search_knowledge 驱动语义层规则检索
+    "reviewer": ["search_knowledge", "submit_review"],
 }
+
+# post-validation 每轮最多注入此轮次；超过后打 warning 不阻塞
+_POST_VALIDATION_ROUNDS = 2
+_POST_VALIDATION_MINI_ITERS = 3
 
 
 @dataclass
@@ -818,18 +824,67 @@ class BaseAgent:
             raw = window.messages[-1].get("content", "") if window.messages else ""
             final_output = f"[TRUNCATED:max_iterations={self.soul.max_iterations}] {raw}"
 
-        messages = window.messages  # 下游（Hook 自省、必调校验）沿用原变量名
+        messages = window.messages
 
-        # 6. 必调工具校验（代码级硬约束）
+        # 6. 必调工具 post-validation（代码级硬约束）
+        # ReAct 循环结束后检查必调工具；缺失则注入补全指令并继续 LLM 对话，
+        # 每轮注入一次，最多 _POST_VALIDATION_ROUNDS 轮；达上限后打 warning 不阻塞。
         missing = self._check_required_tools(messages)
-        if missing:
-            warning = (
-                f"\n\n⚠️ 合规警告：本次执行未调用必需工具 {missing}，"
-                "输出可能未经必要审核流程。"
+        for _pv in range(_POST_VALIDATION_ROUNDS):
+            if not missing:
+                break
+            logger.info(
+                "[%s] post-validation 第%d/%d轮：缺少必调工具 %s，注入补全指令",
+                self.soul.name, _pv + 1, _POST_VALIDATION_ROUNDS, missing,
             )
-            final_output += warning
-            logger.warning(
-                "[%s] 必调工具缺失: %s", self.soul.name, missing,
+            self._publish("agent.post_validation", {"missing_tools": missing, "round": _pv + 1})
+            # reviewer 场景补充逐行提示，避免只调一次就结束
+            if self.role_id == "reviewer" and "submit_review" in missing:
+                extra = "\n对每一条内容行必须独立调用一次 submit_review（不能合并处理），调用时须填写全部 dimensions 五个字段。"
+            else:
+                extra = ""
+            window.append({
+                "role": "user",
+                "content": (
+                    f"⚠️ 工具合规校验：你在本次工作中还未调用必须工具 {missing}。\n"
+                    f"请立即调用这些工具完成必要操作，然后输出最终结论。{extra}"
+                ),
+            })
+            # mini-loop：tool call → tool result → final text（最多 _POST_VALIDATION_MINI_ITERS 步）
+            for _pv_iter in range(_POST_VALIDATION_MINI_ITERS):
+                try:
+                    resp = await self._llm_call(
+                        window.messages, stage="post_validation", iteration=_pv_iter + 1,
+                    )
+                    pv_msg = resp.choices[0].message
+                    window.append(pv_msg.model_dump())
+                    if pv_msg.tool_calls:
+                        for tc in pv_msg.tool_calls:
+                            fn_name = tc.function.name
+                            try:
+                                fn_args = json.loads(tc.function.arguments)
+                            except json.JSONDecodeError:
+                                fn_args = {}
+                            result = await self._registry.call_tool(fn_name, fn_args, context)
+                            from memory.cost_tracker import cost_tracker as _ct
+                            _ct.record_tool_call(self.record_id, self.role_id, fn_name, 0)
+                            window.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+                    else:
+                        final_output = pv_msg.content or final_output
+                        break  # LLM 已给出最终文本，mini-loop 结束
+                except Exception as _pv_exc:
+                    logger.warning(
+                        "[%s] post-validation 第%d轮 mini-iter %d 失败: %s",
+                        self.soul.name, _pv + 1, _pv_iter + 1, _pv_exc,
+                    )
+                    break
+            messages = window.messages
+            missing = self._check_required_tools(messages)
+
+        if missing:
+            logger.warning("[%s] post-validation 后仍缺少必调工具: %s", self.soul.name, missing)
+            final_output += (
+                f"\n\n⚠️ 合规警告：本次执行未调用必需工具 {missing}，输出可能未经必要审核流程。"
             )
 
         # 7. 保存对话历史供 Hook 使用
@@ -864,25 +919,57 @@ class BaseAgent:
         return final_output
 
     def _check_required_tools(self, messages: list[dict]) -> list[str]:
-        """检查 ReAct 历史中是否调用了当前角色的必需工具。
+        """检查 ReAct 历史中是否调用了当前角色的必需工具，且调用未以错误结束。
+
+        局限：只检查工具是否被调用过至少一次（不检查 per-row 覆盖率，
+        那需要在 Orchestrator 层读取内容行数后做额外校验）。
 
         Returns:
-            缺失的工具名列表，空列表表示全部满足。
+            缺失或全部结果为错误的工具名列表，空列表表示全部满足。
         """
         required = _REQUIRED_TOOL_CALLS.get(self.role_id, [])
         if not required:
             return []
 
-        # 从对话历史中提取所有实际调用的工具名
+        # 第一遍：收集所有 assistant 工具调用，建立 call_id→tool_name 映射
         called: set[str] = set()
+        tc_id_to_name: dict[str, str] = {}
         for msg in messages:
             if not isinstance(msg, dict) or msg.get("role") != "assistant":
                 continue
             for tc in msg.get("tool_calls") or []:
                 if isinstance(tc, dict):
-                    called.add(tc.get("function", {}).get("name", ""))
+                    fn_name = tc.get("function", {}).get("name", "")
+                    tc_id = tc.get("id", "")
+                    called.add(fn_name)
+                    if tc_id and fn_name:
+                        tc_id_to_name[tc_id] = fn_name
 
-        return [t for t in required if t not in called]
+        # 第二遍：检查工具结果 — 如果某必调工具的全部结果都以"错误:"开头，
+        # 视为未有效调用（等同于没调用）
+        # 注：仅当某工具 100% 结果为错误时才认为"缺失"，部分成功则放行
+        tool_error_counts: dict[str, int] = {}
+        tool_total_counts: dict[str, int] = {}
+        for msg in messages:
+            if not isinstance(msg, dict) or msg.get("role") != "tool":
+                continue
+            tc_id = msg.get("tool_call_id", "")
+            tool_name = tc_id_to_name.get(tc_id, "")
+            if not tool_name or tool_name not in required:
+                continue
+            content = msg.get("content", "")
+            tool_total_counts[tool_name] = tool_total_counts.get(tool_name, 0) + 1
+            if isinstance(content, str) and content.startswith("错误:"):
+                tool_error_counts[tool_name] = tool_error_counts.get(tool_name, 0) + 1
+
+        # 全部结果均为错误的工具，等同于未有效调用
+        all_failed: set[str] = {
+            t for t in required
+            if tool_total_counts.get(t, 0) > 0
+            and tool_error_counts.get(t, 0) == tool_total_counts.get(t, 0)
+        }
+
+        return [t for t in required if t not in called or t in all_failed]
 
     async def _load_experiences(self, project_type: str) -> str:
         """从两源加载历史经验拼为 prompt 段落：
