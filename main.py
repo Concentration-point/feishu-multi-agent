@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 _processed_record_ids: set[str] = set()   # 飞书 webhook 幂等（防短时间重发）
 _running_record_ids: set[str] = set()     # 当前正在运行的 record_id（运行中锁）
+_record_task_map: dict[str, asyncio.Task] = {}  # record_id → asyncio.Task（用于僵尸锁检测）
 _sync_service = None
 _sync_task: asyncio.Task | None = None
 _download_service = None
@@ -38,11 +39,19 @@ _pipeline_tasks: set[asyncio.Task] = set()  # 跟踪所有运行中的 pipeline 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """FastAPI 应用生命周期：启动后台同步，优雅关停所有 pipeline。"""
+    import asyncio as _asyncio
+    from feishu import card_actions, ws_client
+
+    # 绑定主 asyncio 循环 + 启动 WebSocket 长连接（接收卡片按钮点击事件）
+    card_actions.set_main_loop(_asyncio.get_running_loop())
+    ws_client.start()
+
     await _start_background_sync()
     await _start_background_download()
     try:
         yield
     finally:
+        card_actions.shutdown()
         await _cancel_all_pipelines()
         await _stop_background_download()
         await _stop_background_sync()
@@ -350,14 +359,23 @@ async def trigger_pipeline(record_id: str):
       - 跑完后 _running_record_ids 会被释放，可以再次触发（断点续审场景必需）
     """
     if record_id in _running_record_ids:
-        return JSONResponse({
-            "ok": True,
-            "already_running": True,
-            "record_id": record_id,
-            "message": "项目已在运行中，已跳转到实时视图",
-        })
+        # 僵尸锁检测：如果对应的 asyncio.Task 已结束（进程被 kill 后 finally 未执行），
+        # 清除残留锁，允许重新触发。
+        task = _record_task_map.get(record_id)
+        if task is not None and task.done():
+            logger.warning("[Trigger] 检测到僵尸锁 %s，自动清除并重新触发", record_id)
+            _running_record_ids.discard(record_id)
+            _record_task_map.pop(record_id, None)
+        else:
+            return JSONResponse({
+                "ok": True,
+                "already_running": True,
+                "record_id": record_id,
+                "message": "项目已在运行中，已跳转到实时视图",
+            })
     _running_record_ids.add(record_id)
-    _track_task(_launch_pipeline(record_id))
+    task = _track_task(_launch_pipeline(record_id))
+    _record_task_map[record_id] = task
     return JSONResponse({"ok": True, "record_id": record_id})
 
 
@@ -605,6 +623,9 @@ async def tool_stats(
                 return _dt.min.replace(tzinfo=_tz.utc)
         records = [r for r in records if _ts(r) >= cutoff]
 
+    # 只统计工具调用记录（event="tool_call" 或含 "tool" 字段），过滤掉 LLM 调用记录
+    records = [r for r in records if "tool" in r]
+
     # 聚合每个工具的统计
     stats: dict[str, dict] = defaultdict(lambda: {
         "total": 0, "ok": 0, "fail": 0, "durations": [], "errors": [],
@@ -738,15 +759,31 @@ async def _launch_pipeline(record_id: str) -> None:
         logger.info("[Webhook] start pipeline for %s", record_id)
         orchestrator = Orchestrator(record_id=record_id, event_bus=event_bus)
         await orchestrator.run()
+        # 如果 Orchestrator 正常返回但从未发布 pipeline.started（如 pm.load() 失败），
+        # 主动发布 pipeline.failed 让前端感知，避免 WaitingOverlay 永久卡死。
+        if not getattr(orchestrator, "_started", False):
+            event_bus.publish(
+                record_id, "pipeline.failed",
+                {"error": "流水线未能启动（项目加载失败）", "record_id": record_id},
+            )
         await _trigger_sync_once()
     except asyncio.CancelledError:
         logger.info("[Webhook] pipeline cancelled for %s (shutdown)", record_id)
         raise  # 必须 re-raise 让 task 状态变为 cancelled
-    except Exception:
+    except Exception as exc:
         logger.exception("[Webhook] pipeline failed for %s", record_id)
+        # 异常退出时也发布 pipeline.failed，让前端从 WaitingOverlay 退出
+        try:
+            event_bus.publish(
+                record_id, "pipeline.failed",
+                {"error": f"{type(exc).__name__}: {exc}", "record_id": record_id},
+            )
+        except Exception:
+            pass
     finally:
         # 释放运行中锁，允许同 record_id 后续重新触发（恢复人审场景必需）
         _running_record_ids.discard(record_id)
+        _record_task_map.pop(record_id, None)
 
 
 @app.post("/webhook/event")
@@ -805,10 +842,13 @@ def main() -> int:
         report_type = getattr(args, "report_type", "weekly")
         return _run(run_report(report_type))
     if args.command == "serve":
+        import os
         import uvicorn
 
         uvicorn.run(app, host="0.0.0.0", port=WEBHOOK_PORT)
-        return 0
+        # Windows ProactorEventLoop 在 lark_oapi ws 线程中留有未清理的 I/O handle，
+        # uvicorn 已完成 graceful shutdown（lifespan finally 已跑完），直接 os._exit 绕过残留句柄
+        os._exit(0)
 
     parser.print_help()
     return 1

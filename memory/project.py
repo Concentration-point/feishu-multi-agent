@@ -283,11 +283,27 @@ class ContentMemory:
     async def write_review(
         self, record_id: str, status: str, feedback: str
     ) -> None:
-        """审核写审核状态 + 反馈。"""
+        """审核写审核状态 + 反馈（同时写两个字段）。"""
         await self._client.update_record(
             self._table_id,
             record_id,
             {FC["review_status"]: status, FC["review_feedback"]: feedback},
+        )
+
+    async def write_review_status(self, record_id: str, status: str) -> None:
+        """只写审核状态，不触碰审核反馈字段。"""
+        await self._client.update_record(
+            self._table_id,
+            record_id,
+            {FC["review_status"]: status},
+        )
+
+    async def write_review_feedback(self, record_id: str, feedback: str) -> None:
+        """只写审核反馈，不触碰审核状态字段。"""
+        await self._client.update_record(
+            self._table_id,
+            record_id,
+            {FC["review_feedback"]: feedback},
         )
 
     async def write_publish_date(self, record_id: str, date: str) -> None:

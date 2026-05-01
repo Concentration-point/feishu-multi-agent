@@ -75,12 +75,8 @@ async def execute(params: dict, context: AgentContext) -> str:
 
         if field_name == "review_summary":
             proj = await pm.load()
-            parsed_pass_rate = _parse_pass_rate(content)
-            pass_rate = (
-                parsed_pass_rate
-                if parsed_pass_rate is not None
-                else float(proj.review_pass_rate or 0.0)
-            )
+            # 只写总评文本，pass_rate 保持现有值不变（soul.md 要求单独调用 review_pass_rate 写回）
+            pass_rate = float(proj.review_pass_rate or 0.0)
             await pm.write_review_summary(
                 content,
                 pass_rate,
@@ -88,8 +84,7 @@ async def execute(params: dict, context: AgentContext) -> str:
                 red_flag=getattr(proj, "review_red_flag", "") or "",
             )
             return (
-                f"已写入 review_summary（{len(content)} 字），"
-                f"review_pass_rate={pass_rate:.0%}"
+                f"已写入 review_summary（{len(content)} 字）"
             )
 
         if field_name == "review_pass_rate":

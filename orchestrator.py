@@ -76,8 +76,10 @@ class Orchestrator:
         self._review_red_flag = ""
         self._max_route_steps = MAX_ROUTE_STEPS
         # 死循环防护：同状态连续 N 次后强制 halt，可在测试中覆写
-        self._no_progress_limit = 2
+        # AM 需要多轮人类交互，给更多机会（默认 3）
+        self._no_progress_limit = 3
         self._pm = ProjectMemory(record_id)
+        self._started = False  # 标记 pipeline.started 是否已发布
 
     def _publish(self, event_type: str, payload: dict | None = None, *, agent_role: str = "", agent_name: str = "") -> None:
         if self._event_bus is None:
@@ -160,6 +162,7 @@ class Orchestrator:
             "routing": "dynamic",
             "initial_status": current_status,
         })
+        self._started = True
 
         # ── 动态路由主循环 ──
         step = 0
@@ -328,6 +331,24 @@ class Orchestrator:
             # ── 审核完成后处理返工逻辑 ──
             if role_id == "reviewer":
                 await self._handle_reviewer_retries()
+
+            # ── AM 完成后兜底：LLM 可能漏调 update_status，Orchestrator 兜底推进 ──
+            if role_id == "account_manager" and result.ok and current_status == "解读中":
+                try:
+                    proj_check = await self._pm.load()
+                    has_brief = bool((proj_check.brief_analysis or "").strip())
+                except Exception:
+                    has_brief = bool(result.output.strip())
+                if has_brief:
+                    print(
+                        f"[Orchestrator] AM 兜底: 阶段成功但 status 仍为「解读中」，"
+                        f"自动推进到「待人审」"
+                    )
+                    try:
+                        await self._pm.update_status(STATUS_PENDING_REVIEW)
+                        current_status = STATUS_PENDING_REVIEW
+                    except Exception as exc:
+                        print(f"[Orchestrator] 警告: AM 兜底状态推进失败: {exc}")
 
             # ── 路由决策：读取最新状态，进入下一轮 ──
             current_status = await self._read_current_status()

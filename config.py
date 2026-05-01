@@ -60,6 +60,7 @@ DELIVERY_DOC_ENABLED: bool = os.getenv("DELIVERY_DOC_ENABLED", "true").lower() i
 AUTO_APPROVE_HUMAN_REVIEW: bool = os.getenv("AUTO_APPROVE_HUMAN_REVIEW", "false").lower() in ("true", "1", "yes")
 HUMAN_REVIEW_TIMEOUT: int = int(os.getenv("HUMAN_REVIEW_TIMEOUT", "300"))
 HUMAN_REVIEW_POLL_INTERVAL: int = int(os.getenv("HUMAN_REVIEW_POLL_INTERVAL", "5"))
+ASK_HUMAN_TIMEOUT: int = int(os.getenv("ASK_HUMAN_TIMEOUT", "120"))
 
 # ── 知识库配置 ──
 KNOWLEDGE_BASE_PATH: str = os.getenv("KNOWLEDGE_BASE_PATH", "knowledge")
