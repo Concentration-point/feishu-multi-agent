@@ -1,4 +1,9 @@
-"""Agent 工具: 向飞书群发送选择题卡片，阻塞等待人类点击按钮，返回所选项文字。
+"""Agent 工具: 向飞书群发送带按钮的交互式卡片，阻塞等待人类点击后返回所选项文字。
+
+双通道接收人类响应：
+  1. card.action.trigger（主通道）—— 用户直接点击卡片按钮，WebSocket 实时接收
+  2. im.message.receive_v1（兜底）—— 用户在群里打字回复数字或选项文字
+  3. polling list_messages（降级）—— WebSocket 不可用时的最终兜底
 
 典型用途：
   - Agent 遇到需要人类判断的节点（审核通过/驳回/修改）
@@ -8,6 +13,7 @@
 依赖：
   - feishu/ws_client.py 启动的 WebSocket 长连接（在 server 模式下自动启动）
   - 飞书开放平台已订阅 card.action.trigger 事件（长连接模式）
+  - 飞书开放平台已订阅 im.message.receive_v1 事件（兜底）
 """
 import asyncio
 import logging
@@ -23,8 +29,9 @@ SCHEMA = {
     "function": {
         "name": "ask_human",
         "description": (
-            "向飞书群聊发送带按钮的选择题卡片，等待人类点击后返回所选项文字。"
+            "向飞书群聊发送带按钮的交互式卡片，等待人类点击按钮或回复文字后返回所选项。"
             "用于需要人类判断的场景：如审核结果确认、多方案决策、风险等级评估等。"
+            "卡片包含真正的飞书按钮，人类可直接点击选择，无需打字。"
             "工具会阻塞等待人类响应，超时则返回提示。"
         ),
         "parameters": {
