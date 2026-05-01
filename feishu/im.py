@@ -165,6 +165,58 @@ class FeishuIMClient:
         logger.info("send_card OK chat=%s title=%s color=%s", chat_id, title, color)
         return data
 
+    async def send_prompt_card(
+        self,
+        chat_id: str,
+        question: str,
+        title: str = "需要你的输入",
+        color: str = "blue",
+    ) -> tuple[dict, str]:
+        """发送自由文本提示卡片（不带选项），返回 (完整响应, message_id)。
+
+        用户在群聊中直接回复文字即可，ws_client 通过 card_actions 的
+        accept_any 模式接收任意文本回复。
+
+        Args:
+            chat_id: 群聊 ID
+            question: 问题正文，支持 Markdown
+            title: 卡片标题
+            color: 卡片主题色 blue/green/orange/red/purple
+        """
+        body = (
+            f"{question}\n\n"
+            f"---\n\n"
+            f"**请在群聊中直接回复文字即可。**"
+        )
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": title},
+                "template": color,
+            },
+            "elements": [
+                {"tag": "markdown", "content": body},
+            ],
+        }
+        headers = await self._headers()
+        payload = {
+            "receive_id": chat_id,
+            "msg_type": "interactive",
+            "content": json.dumps(card, ensure_ascii=False),
+        }
+        async with httpx.AsyncClient(timeout=httpx.Timeout(IM_TIMEOUT_SECONDS)) as client:
+            resp = await client.post(
+                MESSAGES_URL, headers=headers, json=payload,
+                params={"receive_id_type": "chat_id"},
+            )
+        data = self._check(resp)
+        msg_id = data.get("data", {}).get("message_id", "")
+        logger.info(
+            "send_prompt_card OK chat=%s title=%s msg_id=%s",
+            chat_id, title, msg_id,
+        )
+        return data, msg_id
+
     async def send_card_return_id(
         self,
         chat_id: str,
@@ -175,4 +227,65 @@ class FeishuIMClient:
         """发送卡片消息并返回 (完整响应, message_id)。"""
         data = await self.send_card(chat_id, title, content, color)
         msg_id = data.get("data", {}).get("message_id", "")
+        return data, msg_id
+
+    async def send_choice_card(
+        self,
+        chat_id: str,
+        question: str,
+        choices: list[str],
+        title: str = "需要你的判断",
+        color: str = "blue",
+    ) -> tuple[dict, str]:
+        """发送选择题展示卡片，返回 (完整响应, message_id)。
+
+        卡片以数字列表展示选项，用户在群里回复数字（"1"/"2"/"3"）或选项文字即可。
+        ws_client 通过 im.message.receive_v1 事件接收回复并通知 ask_human 工具。
+        无需按钮回调，无需公网 URL。
+
+        Args:
+            chat_id: 群聊 ID
+            question: 问题正文，支持 Markdown
+            choices: 选项列表（2-6 项）
+            title: 卡片标题
+            color: 卡片主题色 blue/green/orange/red/purple
+        """
+        number_emoji = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"]
+        choices_md = "\n".join(
+            f"{number_emoji[i]}  **{choice}**"
+            for i, choice in enumerate(choices)
+        )
+        body = (
+            f"{question}\n\n"
+            f"---\n\n"
+            f"**请在群聊中回复数字选择：**\n\n"
+            f"{choices_md}"
+        )
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": title},
+                "template": color,
+            },
+            "elements": [
+                {"tag": "markdown", "content": body},
+            ],
+        }
+        headers = await self._headers()
+        payload = {
+            "receive_id": chat_id,
+            "msg_type": "interactive",
+            "content": json.dumps(card, ensure_ascii=False),
+        }
+        async with httpx.AsyncClient(timeout=httpx.Timeout(IM_TIMEOUT_SECONDS)) as client:
+            resp = await client.post(
+                MESSAGES_URL, headers=headers, json=payload,
+                params={"receive_id_type": "chat_id"},
+            )
+        data = self._check(resp)
+        msg_id = data.get("data", {}).get("message_id", "")
+        logger.info(
+            "send_choice_card OK chat=%s title=%s choices=%s msg_id=%s",
+            chat_id, title, choices, msg_id,
+        )
         return data, msg_id
