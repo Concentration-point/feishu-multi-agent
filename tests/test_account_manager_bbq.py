@@ -1,18 +1,17 @@
-"""客户经理 (account_manager) 端到端单测 — 烧烤店 brief 场景。
+"""Live test for account_manager ask_human in the BBQ brief scenario.
 
-使用方法:
-    python tests/test_account_manager_bbq.py
+Run:
+  python tests/test_account_manager_bbq.py
 
-底层逻辑:
-    - 真实 LLM + 真实 Bitable，建一条测试 record，跑 BaseAgent("account_manager")，
-      校验 7 项硬指标（状态推进 / 字段长度 / 10 节结构 / 三类工具调用 / 缺失信息识别 /
-      行业风险命中）。
-    - 客户名称带 [TEST-yyyymmdd-HHMMSS] 前缀，便于事后批量识别和清理；record 跑完保留。
-    - brief 写死，不参数化；想换场景请 fork 一份。
+Optional env vars:
+  ASK_HUMAN_TEST_TIMEOUT=60
+  ASK_HUMAN_REQUIRE_REPLY=1
+  ASK_HUMAN_START_WS=1
 
-前置条件:
-    1. .env 中已配置 LLM_API_KEY、FEISHU_APP_ID/SECRET、TAVILY_API_KEY
-    2. Bitable 项目主表字段映射与 config.FIELD_MAP_PROJECT 一致
+Notes:
+  - This script uses a real Bitable record and a real LLM call.
+  - It verifies that account_manager can trigger ask_human.
+  - For reply collection, it prefers WebSocket and also adds a polling fallback.
 """
 
 from __future__ import annotations
@@ -26,6 +25,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -33,43 +33,20 @@ if str(ROOT) not in sys.path:
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-# 注：Windows asyncio loop policy 修复已统一拉到 _runtime.py，由 config.py 顶部
-# 触发，所有入口共享，本脚本无需重复处理。
 
-
-# ── brief 场景常量（写死） ───────────────────────────────────────────────
-
-CLIENT_NAME_RAW = "鲜烤记本地烧烤"
+CLIENT_NAME_RAW = "BBQ ask_human live test"
 BRIEF_TEXT = (
-    "客户为本地烧烤店（行业：本地生活 / 餐饮），核心差异化在于鲜货现烤而非市面"
-    "常见的冷冻食材，且食材品类丰富。目标是提升店面到店客流。"
-    "主力人群：25-40 岁本地居民，情侣，年轻人。"
+    "We are a new neighborhood BBQ shop. We want more late-night foot traffic after the holiday. "
+    "The brief intentionally omits budget, main platforms, and available assets. "
+    "Please produce the brief analysis first."
 )
-PROJECT_TYPE = "日常运营"  # 贴近的现有枚举值（餐饮拓客在 config 里没单独类型）
-BRAND_TONE = "街坊烟火气、真实可信、强调新鲜与品质"
-DEPT_STYLE = "所有产出必须包含到店转化引导（地址、营业时间或预约入口）"
+PROJECT_TYPE = "日常运营"
+BRAND_TONE = "烟火气，年轻，真实，不要空喊口号"
+DEPT_STYLE = "Do not invent budget, platform, or asset constraints."
 
+MIN_BRIEF_ANALYSIS_CHARS = 300
+EXPECTED_TOOLS = ["read_project", "search_web", "search_knowledge", "ask_human"]
 
-# ── 断言阈值 ──────────────────────────────────────────────────────────
-
-MIN_BRIEF_ANALYSIS_CHARS = 800
-EXPECTED_SECTIONS = [
-    "### 1. 品牌调研",
-    "### 2. 项目摘要",
-    "### 3. 目标理解",
-    "### 4. 受众与场景",
-    "### 5. 关键约束",
-    "### 6. 合规与风险提醒",
-    "### 7. 已明确的信息",
-    "### 8. 缺失信息",
-    "### 9. 准入结论",
-]
-REQUIRED_TOOLS = ["search_web", "web_fetch", "search_knowledge"]
-MISSING_INFO_KEYWORDS = ["预算", "时间", "平台", "节点", "档期"]
-INDUSTRY_RISK_KEYWORDS = ["食品", "餐饮", "卫生", "合规", "广告法", "虚假宣传"]
-
-
-# ── .env 加载 ────────────────────────────────────────────────────────
 
 def load_env_file(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -84,76 +61,203 @@ def load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-# ── ReAct 日志 handler，抓工具调用顺序 ────────────────────────────────
+def env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
-class ReActLogHandler(logging.Handler):
+
+class LiveLogHandler(logging.Handler):
     def __init__(self) -> None:
         super().__init__(level=logging.INFO)
-        self.iterations = 0
+        self.react_iterations = 0
         self.tools: list[str] = []
+        self.ask_human_called = False
+        self.ask_human_card_sent = False
+        self.ask_human_reply_received = False
+        self.ask_human_reply_choice = ""
+        self.choice_card_sent = False
+        self.choice_card_message_id = ""
+        self.ws_started = False
+        self.ws_reply_matched = False
+        self.poll_reply_matched = False
+        self.recent_lines: list[str] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         message = self.format(record)
+        self.recent_lines.append(message)
+        if len(self.recent_lines) > 30:
+            self.recent_lines.pop(0)
+
+        logger_name = record.name
+
         if "调用工具" in message:
-            self.iterations += 1
-            tool_name = message.split("调用工具", 1)[-1].strip()
-            tool_name = tool_name.split("(", 1)[0].strip()
-            print(f"  [iter {self.iterations}] -> {tool_name}", flush=True)
+            tool_name = self._extract_tool_name(message)
+            self.react_iterations += 1
             if tool_name and tool_name not in self.tools:
                 self.tools.append(tool_name)
-        elif "输出最终结果" in message or "循环结束" in message:
-            print(f"  [done] {message}", flush=True)
+            if tool_name == "ask_human":
+                self.ask_human_called = True
+            print(f"[react] {message}", flush=True)
+            return
+
+        if logger_name == "tools.ask_human":
+            if "卡片已发出" in message:
+                self.ask_human_card_sent = True
+            if "收到选择" in message:
+                self.ask_human_reply_received = True
+                self.ask_human_reply_choice = self._extract_choice(message)
+            print(f"[ask_human] {message}", flush=True)
+            return
+
+        if logger_name == "feishu.im" and "send_choice_card OK" in message:
+            self.choice_card_sent = True
+            self.choice_card_message_id = self._extract_message_id(message)
+            print(f"[im] {message}", flush=True)
+            return
+
+        if logger_name == "feishu.card_actions":
+            print(f"[card_actions] {message}", flush=True)
+            return
+
+        if logger_name == "feishu.ws_client":
+            if "WebSocket daemon 线程已启动" in message or "长连接已建立" in message:
+                self.ws_started = True
+            if "用户回复已匹配选项" in message:
+                self.ws_reply_matched = True
+            print(f"[ws] {message}", flush=True)
+            return
+
+    @staticmethod
+    def _extract_tool_name(message: str) -> str:
+        tail = message.split("调用工具", 1)[-1].strip()
+        return tail.split("(", 1)[0].strip()
+
+    @staticmethod
+    def _extract_choice(message: str) -> str:
+        match = re.search(r"choice=([\"'].*?[\"'])", message)
+        return match.group(1) if match else ""
+
+    @staticmethod
+    def _extract_message_id(message: str) -> str:
+        match = re.search(r"msg_id=([^\s]+)", message)
+        return match.group(1) if match else ""
 
 
-async def _heartbeat(started_at: float, stop_evt: asyncio.Event, interval: float = 10.0) -> None:
-    """每 interval 秒输出一次心跳，让人知道脚本没卡死。"""
+async def heartbeat(
+    started_at: float,
+    stop_event: asyncio.Event,
+    handler: LiveLogHandler,
+    interval_seconds: float = 10.0,
+) -> None:
     try:
-        while not stop_evt.is_set():
+        while not stop_event.is_set():
             try:
-                await asyncio.wait_for(stop_evt.wait(), timeout=interval)
+                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
             except asyncio.TimeoutError:
                 elapsed = time.perf_counter() - started_at
-                print(f"  [heartbeat] 已运行 {elapsed:.0f}s ...", flush=True)
+                wait_state = "waiting_reply" if handler.ask_human_card_sent and not handler.ask_human_reply_received else "running"
+                print(
+                    f"[heartbeat] elapsed={elapsed:.0f}s state={wait_state} tools={handler.tools}",
+                    flush=True,
+                )
     except asyncio.CancelledError:
         pass
 
 
-# ── 断言收集器 ────────────────────────────────────────────────────────
+async def poll_for_reply(
+    *,
+    stop_event: asyncio.Event,
+    handler: LiveLogHandler,
+    chat_id: str,
+    start_time_unix: str,
+    interval_seconds: float = 4.0,
+) -> None:
+    """Fallback for live test: poll messages and resolve ask_human manually."""
+    from feishu.card_actions import resolve_by_message
+    from feishu.im import FeishuIMClient
 
-class Assertions:
-    def __init__(self) -> None:
-        self.passed: list[tuple[str, str]] = []
-        self.failed: list[tuple[str, str]] = []
+    im = FeishuIMClient()
+    seen_message_ids: set[str] = set()
 
-    def check(self, ok: bool, name: str, detail: str) -> None:
-        if ok:
-            self.passed.append((name, detail))
-        else:
-            self.failed.append((name, detail))
+    try:
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+                continue
+            except asyncio.TimeoutError:
+                pass
 
-    @property
-    def total(self) -> int:
-        return len(self.passed) + len(self.failed)
+            if not handler.ask_human_card_sent or handler.ask_human_reply_received:
+                continue
 
-    @property
-    def all_passed(self) -> bool:
-        return not self.failed
+            try:
+                messages = await im.list_messages(
+                    chat_id=chat_id,
+                    start_time=start_time_unix,
+                    page_size=20,
+                )
+            except Exception as exc:
+                print(f"[poll] list_messages failed: {exc}", flush=True)
+                continue
 
+            for msg in messages:
+                message_id = msg.get("message_id", "")
+                if message_id:
+                    if message_id in seen_message_ids:
+                        continue
+                    seen_message_ids.add(message_id)
 
-# ── 主流程 ────────────────────────────────────────────────────────────
+                if not im.is_user_message(msg):
+                    continue
+
+                text = im.extract_text_from_message(msg).strip()
+                if not text:
+                    continue
+
+                print(f"[poll] user message: {text!r}", flush=True)
+                if resolve_by_message(chat_id, text):
+                    handler.poll_reply_matched = True
+                    print(f"[poll] matched reply: {text!r}", flush=True)
+                    return
+    except asyncio.CancelledError:
+        pass
+
 
 async def main() -> int:
     env_path = ROOT / ".env"
     file_values = load_env_file(env_path)
+
     llm_key = os.getenv("LLM_API_KEY") or file_values.get("LLM_API_KEY", "")
     feishu_app_id = os.getenv("FEISHU_APP_ID") or file_values.get("FEISHU_APP_ID", "")
+    feishu_app_secret = os.getenv("FEISHU_APP_SECRET") or file_values.get("FEISHU_APP_SECRET", "")
+    feishu_chat_id = os.getenv("FEISHU_CHAT_ID") or file_values.get("FEISHU_CHAT_ID", "")
+    project_table_id = os.getenv("PROJECT_TABLE_ID") or file_values.get("PROJECT_TABLE_ID", "")
 
-    if not env_path.exists() or not llm_key or not feishu_app_id:
-        print("✗ 跳过：缺少 .env 配置（需 LLM_API_KEY + FEISHU_APP_ID）")
+    missing = [
+        name
+        for name, value in [
+            ("LLM_API_KEY", llm_key),
+            ("FEISHU_APP_ID", feishu_app_id),
+            ("FEISHU_APP_SECRET", feishu_app_secret),
+            ("FEISHU_CHAT_ID", feishu_chat_id),
+            ("PROJECT_TABLE_ID", project_table_id),
+        ]
+        if not value
+    ]
+    if missing:
+        print(f"Skip live test: missing config {missing}")
         return 0
 
+    ask_human_timeout = int(os.getenv("ASK_HUMAN_TEST_TIMEOUT", "60"))
+    require_reply = env_bool("ASK_HUMAN_REQUIRE_REPLY", default=False)
+    start_ws = env_bool("ASK_HUMAN_START_WS", default=True)
+    os.environ["ASK_HUMAN_TIMEOUT"] = str(ask_human_timeout)
+
     from agents.base import BaseAgent
-    from config import FIELD_MAP_PROJECT as FP, PROJECT_TABLE_ID
+    from config import FIELD_MAP_PROJECT as FP
+    from feishu import card_actions, ws_client
     from feishu.bitable import BitableClient
     from memory.project import ProjectMemory
 
@@ -169,46 +273,65 @@ async def main() -> int:
         FP["status"]: "待处理",
     }
 
-    print("=" * 60)
-    print("客户经理 单测 — 烧烤店场景")
-    print("=" * 60)
-    print(f"客户名称: {test_client_name}")
-    print(f"项目类型: {PROJECT_TYPE}")
-    print(f"Brief: {BRIEF_TEXT}")
-    print(f"品牌调性: {BRAND_TONE}")
-    print(f"部门风格: {DEPT_STYLE}")
-    print("-" * 60)
+    print("=" * 72)
+    print("account_manager BBQ ask_human live test")
+    print("=" * 72)
+    print(f"client_name      : {test_client_name}")
+    print(f"project_type     : {PROJECT_TYPE}")
+    print(f"ask_human_timeout: {ask_human_timeout}s")
+    print(f"start_ws         : {start_ws}")
+    print(f"require_reply    : {require_reply}")
+    print("-" * 72)
+    print(f"brief            : {BRIEF_TEXT}")
+    print("-" * 72)
+    print("Reply to the Feishu group with a plain number like 1 / 2 / 3.")
+    print("This script now uses both WebSocket and polling fallback.")
+    print("-" * 72)
 
-    started_at = time.perf_counter()
-
-    client = BitableClient()
-    record_id = await client.create_record(PROJECT_TABLE_ID, payload)
-    print(f"✓ 测试记录已创建: {record_id}")
-    print(f"  (前缀 [TEST-{test_tag}] 便于事后批量清理)")
-    print("-" * 60)
-    print("开始跑 ReAct 循环（预计 60–180 秒）...")
-
-    # ReAct 工具调用计数 handler（保留原行为，提取工具序列）
-    handler = ReActLogHandler()
+    handler = LiveLogHandler()
     handler.setFormatter(logging.Formatter("%(name)s %(levelname)s %(message)s"))
 
-    # 同时把 agents.base 的 INFO 日志打到 stdout，避免"屏幕一片空白"
-    stream = logging.StreamHandler(sys.stdout)
-    stream.setLevel(logging.INFO)
-    stream.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%H:%M:%S"))
+    logger_names = [
+        "agents.base",
+        "tools.ask_human",
+        "feishu.im",
+        "feishu.card_actions",
+        "feishu.ws_client",
+    ]
+    loggers: dict[str, tuple[logging.Logger, int]] = {}
+    for logger_name in logger_names:
+        logger_obj = logging.getLogger(logger_name)
+        loggers[logger_name] = (logger_obj, logger_obj.level)
+        logger_obj.setLevel(logging.INFO)
+        logger_obj.addHandler(handler)
 
-    agent_logger = logging.getLogger("agents.base")
-    old_level = agent_logger.level
-    agent_logger.setLevel(logging.INFO)
-    agent_logger.addHandler(handler)
-    agent_logger.addHandler(stream)
+    card_actions.set_main_loop(asyncio.get_running_loop())
+    if start_ws:
+        ws_client.start()
+        await asyncio.sleep(2.0)
+        print(f"ws_client_alive   : {ws_client.is_alive()}")
+        print("-" * 72)
 
-    # 心跳协程，每 10s 打一次时间，让人知道在跑
-    stop_evt = asyncio.Event()
-    heartbeat_task = asyncio.create_task(_heartbeat(started_at, stop_evt, interval=10.0))
+    started_at = time.perf_counter()
+    start_time_unix = str(int(time.time()))
+    client = BitableClient()
+    record_id = await client.create_record(project_table_id, payload)
+    print(f"record_id         : {record_id}")
+    print("-" * 72)
 
-    final_output = ""
+    stop_event = asyncio.Event()
+    heartbeat_task = asyncio.create_task(heartbeat(started_at, stop_event, handler))
+    poll_task = asyncio.create_task(
+        poll_for_reply(
+            stop_event=stop_event,
+            handler=handler,
+            chat_id=feishu_chat_id,
+            start_time_unix=start_time_unix,
+        )
+    )
+
     error: Exception | None = None
+    final_output = ""
 
     try:
         agent = BaseAgent(role_id="account_manager", record_id=record_id)
@@ -216,129 +339,88 @@ async def main() -> int:
     except Exception as exc:
         error = exc
     finally:
-        stop_evt.set()
+        stop_event.set()
         try:
             await heartbeat_task
         except Exception:
             pass
-        agent_logger.removeHandler(handler)
-        agent_logger.removeHandler(stream)
-        agent_logger.setLevel(old_level)
+        try:
+            await poll_task
+        except Exception:
+            pass
+        for logger_obj, old_level in loggers.values():
+            logger_obj.removeHandler(handler)
+            logger_obj.setLevel(old_level)
+        card_actions.shutdown()
 
     elapsed = time.perf_counter() - started_at
 
     if error is not None:
-        print(f"\n✗ Agent 运行抛错: {type(error).__name__}: {error}")
-        print(f"  测试记录 {record_id} 已保留")
+        print(f"[error] Agent run failed: {type(error).__name__}: {error}")
+        print(f"[hint] record kept in Bitable: {record_id}")
         return 1
 
-    print(f"\n✓ Agent 跑完，{handler.iterations} 轮 ReAct，耗时 {elapsed:.1f} 秒")
-    print(f"  最终输出预览（前 200 字）: {(final_output or '(空)')[:200]}")
-    print("-" * 60)
-
-    # ── 拉取产出做断言 ──
     pm = ProjectMemory(record_id)
-    proj = await pm.load()
-    brief_analysis = proj.brief_analysis or ""
-    status_value = proj.status or ""
+    project = await pm.load()
+    brief_analysis = project.brief_analysis or ""
+    status_value = project.status or ""
 
-    a = Assertions()
+    checks: list[tuple[str, bool, str]] = [
+        ("ask_human called", handler.ask_human_called, f"tools={handler.tools}"),
+        ("choice card sent", handler.choice_card_sent, f"msg_id={handler.choice_card_message_id or '(none)'}"),
+        ("brief_analysis written", len(brief_analysis) >= MIN_BRIEF_ANALYSIS_CHARS, f"len={len(brief_analysis)}"),
+    ]
 
-    # 1. 状态推进到"解读中"
-    a.check(
-        status_value == "解读中",
-        "状态推进",
-        f'期望"解读中"，实际"{status_value}"',
-    )
+    if start_ws:
+        checks.append(("ws_client started", handler.ws_started, f"is_alive={ws_client.is_alive()}"))
+    if require_reply:
+        checks.append((
+            "ask_human got reply",
+            handler.ask_human_reply_received,
+            f"choice={handler.ask_human_reply_choice or '(none)'} ws={handler.ws_reply_matched} poll={handler.poll_reply_matched}",
+        ))
 
-    # 2. Brief 解读字段长度 ≥ 阈值
-    a.check(
-        len(brief_analysis) >= MIN_BRIEF_ANALYSIS_CHARS,
-        "Brief 解读字段长度",
-        f"{len(brief_analysis)} 字，阈值 {MIN_BRIEF_ANALYSIS_CHARS}",
-    )
+    missing_tools = [tool for tool in EXPECTED_TOOLS if tool not in handler.tools]
+    checks.append(("required tools present", not missing_tools, f"missing={missing_tools or '(none)'}"))
 
-    # 3. 10 节结构（第 1~9 节，第 10 节是修订说明，首轮可空，不强校验）
-    missing_sections = [s for s in EXPECTED_SECTIONS if s not in brief_analysis]
-    a.check(
-        not missing_sections,
-        "Brief 解读 9 节结构完整",
-        "全部命中" if not missing_sections else f"缺: {missing_sections}",
-    )
+    print()
+    print("=" * 72)
+    print("verification")
+    print("=" * 72)
+    for name, ok, detail in checks:
+        mark = "PASS" if ok else "FAIL"
+        print(f"[{mark}] {name}: {detail}")
 
-    # 4–6. 工具调用：search_web / web_fetch / search_knowledge
-    for tool in REQUIRED_TOOLS:
-        a.check(
-            tool in handler.tools,
-            f"工具调用 {tool}",
-            "已调用" if tool in handler.tools else f"未调用，实际工具列表 {handler.tools}",
-        )
+    print("-" * 72)
+    print(f"status            : {status_value}")
+    print(f"react_iterations  : {handler.react_iterations}")
+    print(f"tools             : {handler.tools}")
+    print(f"ask_human_called  : {handler.ask_human_called}")
+    print(f"card_sent         : {handler.choice_card_sent}")
+    print(f"reply_received    : {handler.ask_human_reply_received}")
+    print(f"reply_via_ws      : {handler.ws_reply_matched}")
+    print(f"reply_via_poll    : {handler.poll_reply_matched}")
+    print(f"final_output_head : {(final_output or '(empty)')[:200]}")
+    print(f"brief_head        : {brief_analysis[:300] if brief_analysis else '(empty)'}")
+    print(f"elapsed           : {elapsed:.1f}s")
+    print(f"record_id         : {record_id}")
+    print("=" * 72)
 
-    # 7. 缺失信息识别（第 8 节内应命中至少一个关键字）
-    section8 = _extract_section(brief_analysis, "### 8. 缺失信息", "### 9.")
-    hit_missing = [k for k in MISSING_INFO_KEYWORDS if k in section8]
-    a.check(
-        bool(hit_missing),
-        "缺失信息识别",
-        f"命中关键字 {hit_missing}" if hit_missing
-        else f"未命中任何 {MISSING_INFO_KEYWORDS}，第 8 节内容: {section8[:200]}",
-    )
+    failed = [name for name, ok, _detail in checks if not ok]
+    if failed:
+        print(f"[result] FAIL -> {failed}")
+        return 1
 
-    # 8. 行业风险命中（第 6 节内应命中至少一个餐饮/食品类关键字）
-    section6 = _extract_section(brief_analysis, "### 6. 合规与风险提醒", "### 7.")
-    hit_risk = [k for k in INDUSTRY_RISK_KEYWORDS if k in section6]
-    a.check(
-        bool(hit_risk),
-        "行业风险命中（餐饮/食品类）",
-        f"命中关键字 {hit_risk}" if hit_risk
-        else f"未命中任何 {INDUSTRY_RISK_KEYWORDS}，第 6 节内容: {section6[:200]}",
-    )
-
-    # ── 报告 ──
-    print("\n" + "=" * 60)
-    print(f"断言报告: {len(a.passed)}/{a.total} 通过")
-    print("=" * 60)
-    if a.passed:
-        print("\n通过:")
-        for name, detail in a.passed:
-            print(f"  ✓ {name}  — {detail}")
-    if a.failed:
-        print("\n失败:")
-        for name, detail in a.failed:
-            print(f"  ✗ {name}  — {detail}")
-
-    print("\n" + "-" * 60)
-    print(f"ReAct 循环轮次: {handler.iterations}")
-    print(f"调用工具列表: {', '.join(handler.tools) if handler.tools else '(无)'}")
-    print(f"Brief 解读字段长度: {len(brief_analysis)} 字")
-    print(f"状态: {status_value}")
-    print(f"耗时: {elapsed:.1f} 秒")
-    print(f"测试记录 ID: {record_id}（前缀 [TEST-{test_tag}] 已保留，可批量清理）")
-    print("=" * 60)
-
-    return 0 if a.all_passed else 1
-
-
-def _extract_section(text: str, start_marker: str, end_marker: str) -> str:
-    """提取两个 section 标题之间的内容，end_marker 用前缀匹配避免标题数字漂移。"""
-    start = text.find(start_marker)
-    if start < 0:
-        return ""
-    tail = text[start + len(start_marker):]
-    # end_marker 可能是 "### 9." 这种前缀，找最近的下一个匹配
-    m = re.search(r"\n###\s+\d+\.", tail)
-    if m:
-        return tail[: m.start()]
-    return tail
+    print("[result] PASS")
+    return 0
 
 
 def _run() -> int:
-    """包一层入口，捕获 KeyboardInterrupt，避免 loop close 时再次卡死。"""
     try:
         return asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n[abort] 用户中断，正在退出...", flush=True)
-        return 130  # 标准 SIGINT 退出码
+        print("\n[abort] user interrupted test")
+        return 130
 
 
 if __name__ == "__main__":

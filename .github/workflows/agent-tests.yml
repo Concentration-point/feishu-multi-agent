@@ -1,0 +1,37 @@
+name: Agent Soul Unit Tests
+
+# 合并门禁：tests/agents/ 是六个角色 soul 的隔离单测 + 工具白名单契约校验
+# 触发条件：所有 push 到 main、所有指向 main 的 PR
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  agent-unit-tests:
+    name: Agent Soul Isolation Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run agent soul isolation tests
+        run: pytest tests/agents/ -v --tb=short
+
+      - name: Run soul contract scan only (fast fallback)
+        if: failure()
+        run: pytest tests/agents/test_soul_contracts.py -v
