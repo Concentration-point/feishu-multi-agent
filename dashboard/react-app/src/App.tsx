@@ -46,22 +46,35 @@ export default function App() {
       store.setConnection("live", "运行中");
       fetch(`/api/trigger/${recordId}`, { method: "POST" })
         .then((r) => r.json())
-        .then((data) => {
+        .then(async (data) => {
           if (data.already_running) {
             // 后端告知：该项目已在运行，前端静默跳转到实时视图
-            // 继续依赖全局 SSE 接收事件流，无需重复触发
             store.setConnection("live", "已在运行中 · 接入实时流");
             store.setProject(
               clientName || "Agent Pipeline",
               `${recordId} · 运行中`,
             );
+            // 已在运行 → SSE 是「从此刻起」流，错过的 pipeline.started/stage_changed 等
+            // 老事件需要从磁盘回放进 store，否则 useLiveSession 的 hasLiveSession 永假，
+            // 触发 WaitingOverlay 卡死在「等待首个事件到达」。
+            try {
+              const r = await fetch(`/api/runs/${recordId}`);
+              const runData = await r.json();
+              if (runData.has_run && Array.isArray(runData.events)) {
+                for (const evt of runData.events as PipelineEvent[]) {
+                  processEvent(evt);
+                }
+              }
+            } catch {
+              /* 历史拉取失败不影响实时流，下游照常依赖 SSE */
+            }
           }
         })
         .catch(() => {
           store.setConnection("error", "触发失败");
         });
     },
-    [store],
+    [store, processEvent],
   );
 
   const handleReplay = useCallback(

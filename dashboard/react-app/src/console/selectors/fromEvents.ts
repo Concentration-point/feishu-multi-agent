@@ -1295,7 +1295,9 @@ function buildExperienceEvolution(snap: EventSnapshot): ExperienceEvolution {
  * 至少要有 pipeline.started，否则前端认为没 live 数据，回退到 mock。
  */
 export function hasLiveSession(events: PipelineEvent[]): boolean {
-  return events.some((e) => e.event_type === "pipeline.started");
+  return events.some(
+    (e) => e.event_type === "pipeline.started" || e.event_type === "pipeline.failed",
+  );
 }
 
 export function projectAgentSession(events: PipelineEvent[]): AgentSession {

@@ -6,7 +6,7 @@
  * 次要信息：所有工具调用都被收敛到 chip 行 + sidebar 审计日志 + 右侧抽屉
  */
 
-import type { ReactElement, ReactNode } from "react";
+import { useState, useEffect, useCallback, type ReactElement, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { TopBar } from "./components/TopBar";
 import { Sidebar } from "./components/Sidebar";
@@ -20,6 +20,7 @@ import { DAGView } from "./views/DAGView";
 import { ToolHealthView } from "./views/ToolHealthView";
 import { CostBanner } from "./components/CostBanner";
 import { useConsoleStore } from "./useConsoleStore";
+import { usePipelineStore } from "../stores/usePipelineStore";
 import type { AgentSession, RoleId } from "./types";
 
 interface ConsoleAppProps {
@@ -62,7 +63,7 @@ export function ConsoleApp({ session, oldPanel, isLive, isWaiting, onShowPicker 
       }}
     >
       <TopBar session={session} isLive={isLive} onShowPicker={onShowPicker} />
-      {isWaiting && <WaitingOverlay />}
+      {isWaiting && <WaitingOverlay onRetry={onShowPicker} />}
 
       {viewMode === "new" ? (
         healthMode ? (
@@ -121,7 +122,24 @@ export function ConsoleApp({ session, oldPanel, isLive, isWaiting, onShowPicker 
   );
 }
 
-function WaitingOverlay() {
+const WAIT_TIMEOUT_MS = 30_000;
+
+function WaitingOverlay({ onRetry }: { onRetry?: () => void }) {
+  const [timedOut, setTimedOut] = useState(false);
+
+  // 每次 WaitingOverlay 挂载时重置计时器（recordId 变化会触发 remount）
+  useEffect(() => {
+    setTimedOut(false);
+    const timer = setTimeout(() => setTimedOut(true), WAIT_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
+  const handleRetry = useCallback(() => {
+    // 清空 store 状态，让 onShowPicker 重新选择
+    usePipelineStore.getState().reset();
+    onRetry?.();
+  }, [onRetry]);
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -151,46 +169,112 @@ function WaitingOverlay() {
           padding: "36px 52px",
           borderRadius: "16px",
           background: "rgba(24, 28, 36, 0.92)",
-          border: "1px solid rgba(110, 231, 183, 0.25)",
+          border: timedOut
+            ? "1px solid rgba(239, 68, 68, 0.4)"
+            : "1px solid rgba(110, 231, 183, 0.25)",
           boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
           fontFamily: "var(--font-sans)",
           color: "var(--color-text-1)",
           minWidth: "320px",
         }}
       >
-        <motion.div
-          animate={{ rotate: 360 }}
-          transition={{ duration: 1.4, repeat: Infinity, ease: "linear" }}
-          style={{
-            width: "34px",
-            height: "34px",
-            borderRadius: "50%",
-            border: "3px solid rgba(110, 231, 183, 0.18)",
-            borderTopColor: "rgba(110, 231, 183, 0.85)",
-          }}
-        />
-        <div style={{ textAlign: "center" }}>
-          <div
-            style={{
-              fontSize: "15px",
-              fontWeight: 500,
-              letterSpacing: "0.02em",
-              marginBottom: "6px",
-            }}
-          >
-            等待首个事件到达
-          </div>
-          <div
-            className="font-mono"
-            style={{
-              fontSize: "11.5px",
-              color: "var(--color-text-3)",
-              letterSpacing: "0.05em",
-            }}
-          >
-            流水线启动中，SSE 通道已就绪
-          </div>
-        </div>
+        {timedOut ? (
+          /* ── 超时状态：错误提示 + 重试 ── */
+          <>
+            <div
+              style={{
+                width: "34px",
+                height: "34px",
+                borderRadius: "50%",
+                background: "rgba(239, 68, 68, 0.15)",
+                display: "grid",
+                placeItems: "center",
+                fontSize: "18px",
+                color: "rgba(239, 68, 68, 0.9)",
+              }}
+            >
+              !
+            </div>
+            <div style={{ textAlign: "center" }}>
+              <div
+                style={{
+                  fontSize: "15px",
+                  fontWeight: 500,
+                  letterSpacing: "0.02em",
+                  marginBottom: "6px",
+                  color: "rgba(239, 68, 68, 0.9)",
+                }}
+              >
+                等待超时
+              </div>
+              <div
+                className="font-mono"
+                style={{
+                  fontSize: "11.5px",
+                  color: "var(--color-text-3)",
+                  letterSpacing: "0.05em",
+                  marginBottom: "16px",
+                }}
+              >
+                流水线可能启动失败，请检查后端日志
+              </div>
+              <button
+                type="button"
+                onClick={handleRetry}
+                style={{
+                  padding: "8px 24px",
+                  borderRadius: "8px",
+                  border: "1px solid rgba(110, 231, 183, 0.4)",
+                  background: "rgba(110, 231, 183, 0.1)",
+                  color: "rgba(110, 231, 183, 0.9)",
+                  fontSize: "13px",
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  letterSpacing: "0.03em",
+                }}
+              >
+                重试
+              </button>
+            </div>
+          </>
+        ) : (
+          /* ── 正常等待状态：转圈 ── */
+          <>
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1.4, repeat: Infinity, ease: "linear" }}
+              style={{
+                width: "34px",
+                height: "34px",
+                borderRadius: "50%",
+                border: "3px solid rgba(110, 231, 183, 0.18)",
+                borderTopColor: "rgba(110, 231, 183, 0.85)",
+              }}
+            />
+            <div style={{ textAlign: "center" }}>
+              <div
+                style={{
+                  fontSize: "15px",
+                  fontWeight: 500,
+                  letterSpacing: "0.02em",
+                  marginBottom: "6px",
+                }}
+              >
+                等待首个事件到达
+              </div>
+              <div
+                className="font-mono"
+                style={{
+                  fontSize: "11.5px",
+                  color: "var(--color-text-3)",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                流水线启动中，SSE 通道已就绪
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </motion.div>
   );

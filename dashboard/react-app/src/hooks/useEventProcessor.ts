@@ -88,6 +88,11 @@ export function useEventProcessor() {
           break;
         }
 
+        case "pipeline.failed": {
+          store.setConnection("error", (p.error as string) || "流水线启动失败");
+          break;
+        }
+
         case "tool.called": {
           const toolName = p.tool_name as string;
           store.addToolCall(toolName);
