@@ -237,11 +237,12 @@ class FeishuIMClient:
         title: str = "需要你的判断",
         color: str = "blue",
     ) -> tuple[dict, str]:
-        """发送选择题展示卡片，返回 (完整响应, message_id)。
+        """发送带按钮的交互式选择卡片，返回 (完整响应, message_id)。
 
-        卡片以数字列表展示选项，用户在群里回复数字（"1"/"2"/"3"）或选项文字即可。
-        ws_client 通过 im.message.receive_v1 事件接收回复并通知 ask_human 工具。
-        无需按钮回调，无需公网 URL。
+        卡片包含真正的飞书按钮（action 组件），用户点击按钮后，
+        ws_client 通过 card.action.trigger 事件接收回调并通知 ask_human 工具。
+        同时保留文字回复兜底：用户在群里回复数字或选项文字依然生效。
+        无需公网 URL，通过 WebSocket 长连接接收回调。
 
         Args:
             chat_id: 群聊 ID
@@ -250,17 +251,17 @@ class FeishuIMClient:
             title: 卡片标题
             color: 卡片主题色 blue/green/orange/red/purple
         """
-        number_emoji = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"]
-        choices_md = "\n".join(
-            f"{number_emoji[i]}  **{choice}**"
+        # 构建按钮列表，value 用 JSON 对象编码选项索引
+        button_styles = ["primary", "default", "danger", "default", "default", "default"]
+        buttons = [
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": choice},
+                "type": button_styles[i] if i < len(button_styles) else "default",
+                "value": {"choice_index": i},
+            }
             for i, choice in enumerate(choices)
-        )
-        body = (
-            f"{question}\n\n"
-            f"---\n\n"
-            f"**请在群聊中回复数字选择：**\n\n"
-            f"{choices_md}"
-        )
+        ]
         card = {
             "config": {"wide_screen_mode": True},
             "header": {
@@ -268,7 +269,13 @@ class FeishuIMClient:
                 "template": color,
             },
             "elements": [
-                {"tag": "markdown", "content": body},
+                {"tag": "markdown", "content": question},
+                {"tag": "hr"},
+                {"tag": "note", "elements": [
+                    {"tag": "plain_text",
+                     "content": "💡 点击下方按钮选择，也可在群里回复数字或选项文字"}
+                ]},
+                {"tag": "action", "actions": buttons},
             ],
         }
         headers = await self._headers()
