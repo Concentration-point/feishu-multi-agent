@@ -149,6 +149,9 @@ _REQUIRED_TOOL_CALLS: dict[str, list[str]] = {
 _POST_VALIDATION_ROUNDS = 2
 _POST_VALIDATION_MINI_ITERS = 3
 
+# 空 turn 检测：LLM 产出无 tool_use 且无 text 时，最多重试注入此轮次
+_MAX_EMPTY_TURN_RETRIES = 2
+
 
 @dataclass
 class SoulConfig:
@@ -484,6 +487,10 @@ class BaseAgent:
         self._pending_experience: dict | None = None
         # 标记 Agent 是否已自主完成 wiki 写入
         self._wiki_written: bool = False
+        # 空 turn 计数（防 LLM reasoning 后不产出 tool_use 也不产出 text）
+        self._empty_turn_count: int = 0
+        # 标记 Agent 是否调用了人机交互工具（ask_human / ask_human_batch）
+        self._used_ask_human: bool = False
         # ReAct 对话历史（供 Hook 回顾）
         self._messages: list[dict] = []
         logger.info(
@@ -556,6 +563,19 @@ class BaseAgent:
                 "# Explicit context\n\n"
                 + json.dumps(context, ensure_ascii=False, indent=2, default=str)
             )
+
+        # 输出规则（强制）—— 与 _build_system_prompt 对齐
+        sections.append(
+            "# 输出规则（强制）\n\n"
+            "你的每一次响应必须包含以下至少一项：\n"
+            "1. 至少一个工具调用（tool_use）—— 执行一个具体动作\n"
+            "2. 一段面向用户的文本回复 —— 汇报进展或说明情况\n\n"
+            "严格禁止：\n"
+            "- 在思考中完成分析后，不产出任何 tool_use 或文本就结束\n"
+            '- 认为"已经想清楚了"就等于"已经做了"\n\n'
+            "如果你不确定下一步该做什么，也必须输出一段文本说明你的困惑，而不是静默结束。"
+        )
+
         return "\n\n---\n\n".join(sections)
 
     @staticmethod
@@ -604,7 +624,31 @@ class BaseAgent:
             messages.append(message.model_dump())
 
             if not message.tool_calls:
-                final_output = message.content or ""
+                content = message.content or ""
+                if not content.strip():
+                    # 空 turn 检测（unit 路径）
+                    self._empty_turn_count += 1
+                    logger.warning(
+                        "[%s] unit 第%d轮 → 空 turn，第 %d/%d 次重试",
+                        self.soul.name, iteration,
+                        self._empty_turn_count, _MAX_EMPTY_TURN_RETRIES,
+                    )
+                    if self._empty_turn_count <= _MAX_EMPTY_TURN_RETRIES:
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "⚠️ [系统检测] 你的上一次响应没有产出任何工具调用或文本回复。"
+                                "请重新审视当前状态，并明确执行一个动作（调用工具）"
+                                "或输出一段文本（汇报当前进展/说明困惑）。"
+                            ),
+                        })
+                        continue
+                    final_output = (
+                        f"[WARNING:empty_turn_retries_exceeded="
+                        f"{self._empty_turn_count}/{_MAX_EMPTY_TURN_RETRIES}]"
+                    )
+                    break
+                final_output = content
                 break
 
             for tc in message.tool_calls:
@@ -707,6 +751,25 @@ class BaseAgent:
             user_msg_parts.append(
                 "- 处理完 platform 子集后即可结束，不要等待/影响其他平台"
             )
+        # fan-out 子 agent 注入 content_rows — 精确限定负责的内容行，避免全表读
+        content_rows = (self._task_filter or {}).get("content_rows")
+        if content_rows:
+            user_msg_parts.append("")
+            user_msg_parts.append(
+                f"【内容行分配】你只负责以下 {len(content_rows)} 条内容行，"
+                f"不要处理其他行（其他行由其他子 Agent 并行处理）："
+            )
+            for cr in content_rows:
+                user_msg_parts.append(
+                    f"  - record_id={cr['record_id']} | 平台={cr.get('platform', '?')}"
+                    f" | 类型={cr.get('content_type', '?')}"
+                    f" | 标题={cr.get('title', '?')}"
+                    f" | 卖点={cr.get('key_point', '?')}"
+                    f" | 人群={cr.get('target_audience', '?')}"
+                )
+            user_msg_parts.append(
+                "- 如果 list_content 返回了其他行，忽略它们，只写上述 record_id 对应的行"
+            )
         # 数据分析师注入报告类型约束
         report_type = (self._task_filter or {}).get("report_type")
         if report_type:
@@ -791,6 +854,9 @@ class BaseAgent:
                     from memory.cost_tracker import cost_tracker as _ct
                     _ct.record_tool_call(self.record_id, self.role_id, fn_name, iteration)
 
+                    if fn_name in ("ask_human", "ask_human_batch"):
+                        self._used_ask_human = True
+
                     self._publish("tool.returned", {
                         "tool_name": fn_name,
                         "result": result[:300] if result else "",
@@ -802,9 +868,42 @@ class BaseAgent:
                         "content": result,
                     })
             else:
-                # 无工具调用 → 最终输出
-                window.append(message.model_dump())  # 保留完整历史供 Hook 使用
-                final_output = message.content or ""
+                # 无工具调用 → 检查是否为空 turn
+                content = message.content or ""
+                window.append(message.model_dump())
+                if not content.strip():
+                    # 空 turn: 模型在 reasoning 中完成了思考但没有产出
+                    self._empty_turn_count += 1
+                    logger.warning(
+                        "[%s] 第%d轮 → 空 turn（无 tool_use 且无文本），"
+                        "第 %d/%d 次重试",
+                        self.soul.name, iteration,
+                        self._empty_turn_count, _MAX_EMPTY_TURN_RETRIES,
+                    )
+                    self._publish("agent.empty_turn", {
+                        "iteration": iteration,
+                        "empty_turn_count": self._empty_turn_count,
+                    }, round_num=iteration)
+                    if self._empty_turn_count <= _MAX_EMPTY_TURN_RETRIES:
+                        window.append({
+                            "role": "user",
+                            "content": (
+                                "⚠️ [系统检测] 你的上一次响应没有产出任何工具调用或文本回复。"
+                                "请重新审视当前状态，并明确执行一个动作（调用工具）"
+                                "或输出一段文本（汇报当前进展/说明困惑）。"
+                                "你在思考中的分析用户和系统都看不到——必须显式输出。"
+                            ),
+                        })
+                        continue
+                    # 超过重试上限，强制截断
+                    final_output = (
+                        f"[WARNING:empty_turn_retries_exceeded="
+                        f"{self._empty_turn_count}/{_MAX_EMPTY_TURN_RETRIES}]"
+                    )
+                    break
+
+                # 有文本 → 正常最终输出
+                final_output = content
 
                 self._publish("agent.thinking", {
                     "content": final_output[:500],
@@ -1167,6 +1266,23 @@ class BaseAgent:
             sections.append(
                 "# 历史经验（基于过往项目积累）\n\n" + experience_text
             )
+
+        # 输出规则（强制）—— 防静默 turn + thinking 边界
+        sections.append(
+            "# 输出规则（强制）\n\n"
+            "你的每一次响应必须包含以下至少一项：\n"
+            "1. 至少一个工具调用（tool_use）—— 执行一个具体动作\n"
+            "2. 一段面向用户的文本回复 —— 汇报进展或说明情况\n\n"
+            "严格禁止：\n"
+            "- 在思考中完成分析后，不产出任何 tool_use 或文本就结束\n"
+            "- 在思考中想好了要问的问题，但没有实际输出给用户\n"
+            '- 认为"已经想清楚了"就等于"已经做了"\n\n'
+            "如果你不确定下一步该做什么，也必须输出一段文本说明你的困惑，而不是静默结束。\n\n"
+            "【Thinking 边界说明】你的思考/推理过程用户完全看不到。"
+            "你需要用户知道的任何信息，必须明确写在文本回复中。"
+            "思考中「想到要追问」不等于已经追问了，思考中「决定调工具」不等于已经调用了。"
+            "思考是草稿纸——观众只看舞台上发生的事。"
+        )
 
         return "\n\n---\n\n".join(sections)
 

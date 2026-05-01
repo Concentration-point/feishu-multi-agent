@@ -42,6 +42,27 @@ from memory.project import BriefProject, ContentMemory, ProjectMemory
 logger = logging.getLogger(__name__)
 
 
+def _clear_stage_checkpoint(record_id: str, role_id: str) -> None:
+    """清除指定角色的所有 checkpoint 文件（含 fan-out 平台后缀变体）。
+
+    策略：globbing checkpoints/{record_id}/{role_id}*.json。
+    copywriter fan-out 子 Agent 的 checkpoint 文件名是 copywriter_小红书.json 这种，
+    状态推进后必须一并清除，否则下次返工会错误恢复到旧平台对话。
+    """
+    from pathlib import Path
+    try:
+        checkpoint_dir = Path("checkpoints") / record_id
+        if not checkpoint_dir.is_dir():
+            return
+        count = 0
+        for path in checkpoint_dir.glob(f"{role_id}*.json"):
+            path.unlink()
+            count += 1
+        if count > 0:
+            logger.info("checkpoint 已清除 %d 文件: %s/%s*.json", count, record_id, role_id)
+    except Exception as exc:
+        logger.warning("checkpoint 清除失败: %s", exc)
+
 
 @dataclass
 class StageResult:
@@ -50,6 +71,7 @@ class StageResult:
     duration_sec: float
     output: str = ""
     error: str = ""
+    used_ask_human: bool = False  # Agent 内部调用了 ask_human 工具（有效人机交互，不算死循环）
 
 
 class Orchestrator:
@@ -187,6 +209,8 @@ class Orchestrator:
             if gate_outcome != "approved":
                 await self._finalize_pipeline_halted(project_name, gate_outcome)
                 return self.stage_results
+            # 待人审恢复且审核通过 → AM 阶段已完结，清除其 checkpoint 防止恢复过期上下文
+            _clear_stage_checkpoint(self.record_id, "account_manager")
             current_status = await self._read_current_status()
         else:
             await self._broadcast(
@@ -309,24 +333,47 @@ class Orchestrator:
                     f"[{ts}][{role_id}] {result.error[:200]}"
                 )
 
-            # ── 文案完成后兜底：扫 draft 为空的行，单次 LLM 补写 ──
+            # ── 文案完成后二次兜底：fan-out 已做完成度检查 + 重试，此处为安全网 ──
             if role_id == "copywriter" and result.ok:
-                await self._ensure_copywriter_drafts(project_name)
-                # fan-out 模式下子 Agent 不推进全局状态，Orchestrator 兜底：
-                # 确认全部成稿后主动推进到「审核中」（用当前已知状态判断，避免额外读一次）
-                if current_status == "撰写中":
-                    try:
-                        cm = ContentMemory()
-                        rows = await cm.list_by_project(project_name)
-                        empty_rows = [r for r in rows if not (r.draft or "").strip()]
-                        if rows and not empty_rows:
-                            print(
-                                f"[Orchestrator] 文案兜底：{len(rows)} 条全部成稿，"
-                                f"主动推进状态「撰写中」→「审核中」"
-                            )
-                            await self._pm.update_status("审核中")
-                    except Exception as exc:
-                        print(f"[Orchestrator] 警告: 文案状态推进失败: {exc}")
+                filled = await self._ensure_copywriter_drafts(project_name)
+
+                # 安全网：兜底后再次确认，仍有空行则阻断
+                try:
+                    cm = ContentMemory()
+                    rows = await cm.list_by_project(project_name)
+                    still_empty = [r for r in rows if not (r.draft or "").strip()]
+                except Exception as exc:
+                    logger.warning("文案安全网读行失败: %s", exc)
+                    still_empty = []
+
+                if rows and not still_empty:
+                    # fan-out 应该已经推了状态，这里只做确认
+                    if current_status == "撰写中":
+                        print(
+                            f"[Orchestrator] 文案安全网：{len(rows)} 条全部成稿，"
+                            f"补充推进状态「撰写中」→「审核中」"
+                        )
+                        await self._pm.update_status("审核中")
+                elif still_empty:
+                    logger.error(
+                        "文案安全网失败：fan-out 后仍有 %d/%d 条 draft 为空"
+                        "（兜底补写成功 %d 条），阻断推进到审核",
+                        len(still_empty), len(rows or []), filled,
+                    )
+                    empty_details = ", ".join(
+                        f"{r.platform or '?'}/{(r.title or '?')[:15]}"
+                        for r in still_empty
+                    )
+                    print(
+                        f"[Orchestrator] 文案安全网 FAIL："
+                        f"{len(still_empty)}/{len(rows)} 条仍为空 ({empty_details})"
+                    )
+                    # 子 Agent 不再推状态，但如果外部原因导致状态已是审核中则回退
+                    if current_status == "审核中":
+                        print(
+                            f"[Orchestrator] 文案安全网：回退状态「审核中」→「撰写中」以待重试"
+                        )
+                        await self._pm.update_status("撰写中")
 
             # ── 审核完成后处理返工逻辑 ──
             if role_id == "reviewer":
@@ -347,6 +394,7 @@ class Orchestrator:
                     try:
                         await self._pm.update_status(STATUS_PENDING_REVIEW)
                         current_status = STATUS_PENDING_REVIEW
+                        _clear_stage_checkpoint(self.record_id, role_id)
                     except Exception as exc:
                         print(f"[Orchestrator] 警告: AM 兜底状态推进失败: {exc}")
 
@@ -354,12 +402,20 @@ class Orchestrator:
             current_status = await self._read_current_status()
 
             # ── 死循环防护：状态未推进则计数，连续超阈值即 halt ──
+            # Agent 调用了 ask_human 工具 = 发生了有效人机交互，不算无效循环
             if current_status == status_at_entry:
-                no_progress_count += 1
-                print(
-                    f"[Orchestrator] 死循环防护: status='{current_status}' 经 {role_id} 后未推进 "
-                    f"({no_progress_count}/{NO_PROGRESS_LIMIT})"
-                )
+                if result.used_ask_human:
+                    print(
+                        f"[Orchestrator] 死循环防护: status='{current_status}' 经 {role_id} 后未推进，"
+                        f"但 Agent 调用了 ask_human（人机交互），重置计数"
+                    )
+                    no_progress_count = 0
+                else:
+                    no_progress_count += 1
+                    print(
+                        f"[Orchestrator] 死循环防护: status='{current_status}' 经 {role_id} 后未推进 "
+                        f"({no_progress_count}/{NO_PROGRESS_LIMIT})"
+                    )
                 if no_progress_count >= NO_PROGRESS_LIMIT:
                     print(
                         f"[Orchestrator] 死循环防护触发: status='{current_status}' 连续 "
@@ -380,6 +436,8 @@ class Orchestrator:
                     return self.stage_results
             else:
                 no_progress_count = 0
+                # 状态已推进，清除该角色的 checkpoint（下次应全新执行）
+                _clear_stage_checkpoint(self.record_id, role_id)
 
         else:
             print(f"[Orchestrator] 警告: 动态路由超出最大步数 {self._max_route_steps}，强制终止")
@@ -477,7 +535,11 @@ class Orchestrator:
             output = await asyncio.wait_for(agent.run(), timeout=STAGE_TIMEOUT_SECONDS)
             duration = time.perf_counter() - start
             print(f"[Orchestrator] 阶段 {role_id} 完成，耗时 {duration:.2f} 秒")
-            return StageResult(role_id=role_id, ok=True, duration_sec=duration, output=output or ""), agent
+            return StageResult(
+                role_id=role_id, ok=True, duration_sec=duration,
+                output=output or "",
+                used_ask_human=getattr(agent, '_used_ask_human', False),
+            ), agent
         except asyncio.TimeoutError:
             duration = time.perf_counter() - start
             message = f"阶段超时（>{STAGE_TIMEOUT_SECONDS:.0f}s），强制中止"
@@ -497,13 +559,10 @@ class Orchestrator:
         index: int,
         total: int,
     ) -> tuple[StageResult, list[dict]]:
-        """Copywriter 阶段 fan-out: 按 platform 分组并行子 Agent。
+        """Copywriter 阶段 fan-out: 分发前计数 → 分组 → 推状态 → 并行执行 → 完成度检查 → 重试 → 推审核。
 
-        1. list_content 拉全部 rows，按 row.platform 分组，空值归「通用」
-        2. 每组 BaseAgent(task_filter={platform: X}) asyncio.gather 并行
-        3. gather(return_exceptions=True) 捕获失败组，串行重试 1 次
-        4. 所有子 agent 的 _pending_experience 全部收集并返回
-        5. 汇总成一个 StageResult(role_id=copywriter), ok = 全部子 agent 的 AND
+        状态流转权在编排层：子 Agent 只能写内容，不能推状态。
+        完成度检查确保所有内容行都有成稿后才推进到审核。
         """
         print("=" * 60)
         print(f"[Orchestrator] 启动第 {index}/{total} 阶段: copywriter (fan-out)")
@@ -511,7 +570,7 @@ class Orchestrator:
 
         start = time.perf_counter()
 
-        # 1. 拉 rows 并按 platform 分组
+        # ── 1. 分发前：拉全部 rows，按 platform 分组 ──
         try:
             proj = await self._pm.load()
             rows = await ContentMemory().list_by_project(proj.client_name)
@@ -519,19 +578,12 @@ class Orchestrator:
             duration = time.perf_counter() - start
             message = f"fan-out 拉取 rows 失败: {type(exc).__name__}: {exc}"
             logger.exception("fan-out 拉 rows 异常")
-            print(f"[Orchestrator] {message}")
             return StageResult(
                 role_id="copywriter", ok=False,
                 duration_sec=duration, error=message,
             ), []
 
-        groups: dict[str, list] = {}
-        for row in rows:
-            key = ((row.platform or "").strip()) or "通用"
-            groups.setdefault(key, []).append(row)
-
-        # 空结果预拦截 — 没有任何 row: 退化为单 agent 行为
-        if not groups:
+        if not rows:
             print("[Orchestrator] fan-out: 项目下无 content rows, 退化为单 agent")
             result, agent = await self._run_stage_with_agent(
                 "copywriter", index=index, total=total,
@@ -545,9 +597,13 @@ class Orchestrator:
                 })
             return result, pending
 
-        # 审查 Q3: 空组不 spawn — groups 每个 key 都至少有 1 row
+        groups: dict[str, list] = {}
+        for row in rows:
+            key = ((row.platform or "").strip()) or "通用"
+            groups.setdefault(key, []).append(row)
+
         group_names = sorted(groups.keys())
-        total_rows = sum(len(v) for v in groups.values())
+        total_rows = len(rows)
         print(f"[Orchestrator] fan-out 分组: {group_names} (共 {total_rows} 行)")
 
         # dashboard 预建 sub lane
@@ -557,40 +613,73 @@ class Orchestrator:
             "concurrency_limit": 5,
         }, agent_role="copywriter", agent_name="文案")
 
-        # 2. 创建子 agent — 每个 platform 一个
-        def _make_agent(platform: str) -> BaseAgent:
+        # ── 2. 分发前：Orchestrator 推状态到「撰写中」──
+        try:
+            current_status = await self._read_current_status()
+        except Exception:
+            current_status = "撰写中"
+        if current_status != "撰写中":
+            try:
+                await self._pm.update_status("撰写中")
+                print("[Orchestrator] fan-out: 推状态到「撰写中」")
+            except Exception as exc:
+                print(f"[Orchestrator] 警告: 推状态失败: {exc}")
+
+        # ── 3. 创建子 Agent — 每个 platform 一个，注入 content_rows ──
+        def _make_row_summary(r) -> dict:
+            return {
+                "record_id": r.record_id,
+                "title": r.title or "",
+                "platform": r.platform or "",
+                "content_type": r.content_type or "",
+                "key_point": r.key_point or "",
+                "target_audience": r.target_audience or "",
+            }
+
+        def _make_agent(platform: str, row_list: list) -> BaseAgent:
             return BaseAgent(
                 role_id="copywriter",
                 record_id=self.record_id,
                 event_bus=self._event_bus,
-                task_filter={"platform": platform},
+                task_filter={
+                    "platform": platform,
+                    "content_rows": [_make_row_summary(r) for r in row_list],
+                },
             )
 
-        sub_agents: dict[str, BaseAgent] = {k: _make_agent(k) for k in group_names}
+        sub_agents: dict[str, BaseAgent] = {
+            k: _make_agent(k, groups[k]) for k in group_names
+        }
 
-        # 3. 并行执行，Semaphore 限制最多 5 个同时跑，其余等待
+        # ── 4. 并行执行 + 失败组串行重试 1 次 ──
         _sem = asyncio.Semaphore(5)
 
-        async def _run_with_sem(platform: str):
+        async def _run_with_sem(platform: str) -> tuple[str, str | None, BaseAgent | None, str]:
+            """返回 (platform, output, agent, error)"""
+            agent = sub_agents[platform]
             async with _sem:
-                return await sub_agents[platform].run()
+                try:
+                    output = await agent.run()
+                    return (platform, output, agent, "")
+                except Exception as exc:
+                    return (platform, None, agent, f"{type(exc).__name__}: {exc}")
 
         parallel_start = time.perf_counter()
         tasks = [_run_with_sem(k) for k in group_names]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        raw_results = await asyncio.gather(*tasks)
         parallel_duration = time.perf_counter() - parallel_start
         print(f"[Orchestrator] fan-out 并行执行完成, 耗时 {parallel_duration:.2f}s")
 
-        # 4. 失败组串行重试 1 次
+        # 失败组串行重试
         final_status: dict[str, dict] = {}
-        for platform, result in zip(group_names, results):
-            if isinstance(result, BaseException):
+        for platform, output, agent, error in raw_results:
+            if error:
                 logger.warning(
-                    "[fan-out] platform=%s 首次失败: %s: %s, 准备串行重试",
-                    platform, type(result).__name__, result,
+                    "[fan-out] platform=%s 首次失败: %s, 准备串行重试",
+                    platform, error,
                 )
-                print(f"[Orchestrator] 警告: platform={platform} 首次失败 {type(result).__name__}: {result}, 串行重试")
-                retry_agent = _make_agent(platform)
+                print(f"[Orchestrator] 警告: platform={platform} 首次失败 {error}, 串行重试")
+                retry_agent = _make_agent(platform, groups[platform])
                 try:
                     retry_output = await retry_agent.run()
                     final_status[platform] = {
@@ -613,32 +702,15 @@ class Orchestrator:
             else:
                 final_status[platform] = {
                     "ok": True,
-                    "output": result or "",
-                    "agent": sub_agents[platform],
+                    "output": output or "",
+                    "agent": agent,
                     "retried": False,
                 }
 
-        # 5. 聚合结果
-        all_ok = all(v["ok"] for v in final_status.values())
-        duration = time.perf_counter() - start
-        summary_lines = []
-        for platform in group_names:
-            st = final_status[platform]
-            tag = "OK" if st["ok"] else "FAIL"
-            if st["retried"]:
-                tag += "(retry)"
-            detail = (st.get("output") or "")[:80] if st["ok"] else st.get("error", "")
-            summary_lines.append(f"[{platform}] {tag}: {detail}")
-        stage_output = "fan-out 汇总:\n" + "\n".join(summary_lines)
-        failed = [p for p in group_names if not final_status[p]["ok"]]
-        stage_error = "" if not failed else "; ".join(
-            f"{p}: {final_status[p].get('error', '')}" for p in failed
-        )
-
-        # 6. 收集 pending experiences — 每子 agent 独立一条
+        # ── 5. 收集 pending experiences ──
         pending_experiences: list[dict] = []
         for platform in group_names:
-            ag = final_status[platform]["agent"]
+            ag = final_status[platform].get("agent")
             if ag and ag._pending_experience:
                 pending_experiences.append({
                     "role_id": "copywriter",
@@ -647,10 +719,163 @@ class Orchestrator:
                     "task_filter": {"platform": platform},
                 })
 
+        # ── 6. 完成度检查：重新读取全部内容行，逐条检查 draft ──
+        retry_filled = 0
+        try:
+            check_rows = await ContentMemory().list_by_project(proj.client_name)
+        except Exception as exc:
+            logger.warning("fan-out 完成度检查读行失败: %s", exc)
+            check_rows = []
+
+        empty_rows = [r for r in check_rows if not (r.draft or "").strip()] if check_rows else []
+
+        if empty_rows and len(empty_rows) <= 2:
+            # 少量缺失 → 对缺失条目单独重试一次（完整 ReAct Agent）
+            print(
+                f"[Orchestrator] fan-out 完成度检查：{len(empty_rows)}/{len(check_rows)} 条缺失，"
+                f"启动定向重试"
+            )
+            empty_details = ", ".join(
+                f"{r.platform or '?'}/{r.record_id[:12]}..."
+                f"{r.title[:20] if r.title else '?'}"
+                for r in empty_rows
+            )
+            logger.warning("fan-out 定向重试: %s", empty_details)
+
+            # 按 platform 分组缺失行，为每个平台创建一个重试 agent
+            retry_groups: dict[str, list] = {}
+            for r in empty_rows:
+                key = ((r.platform or "").strip()) or "通用"
+                retry_groups.setdefault(key, []).append(r)
+
+            for retry_platform, retry_rows in retry_groups.items():
+                retry_agent = BaseAgent(
+                    role_id="copywriter",
+                    record_id=self.record_id,
+                    event_bus=self._event_bus,
+                    task_filter={
+                        "platform": retry_platform,
+                        "content_rows": [_make_row_summary(r) for r in retry_rows],
+                        # 告诉 Agent 这是重试
+                        "is_retry": True,
+                        "retry_reason": (
+                            f"上一轮 {retry_platform} 子 Agent 完成后，"
+                            f"以下 {len(retry_rows)} 条内容行 draft 仍为空，"
+                            f"请重新撰写。"
+                        ),
+                    },
+                )
+                try:
+                    retry_output = await retry_agent.run()
+                    # 重试后再次读取验证
+                    try:
+                        verify_rows = await ContentMemory().list_by_project(proj.client_name)
+                        still_empty = [
+                            r for r in verify_rows
+                            if not (r.draft or "").strip()
+                            and r.record_id in {rr.record_id for rr in retry_rows}
+                        ]
+                        retry_filled += len(retry_rows) - len(still_empty)
+                        print(
+                            f"[Orchestrator] 定向重试 platform={retry_platform}: "
+                            f"尝试 {len(retry_rows)} 条，成功 {len(retry_rows) - len(still_empty)} 条"
+                        )
+                    except Exception:
+                        pass
+                    # 收集重试 agent 的经验
+                    if retry_agent._pending_experience:
+                        pending_experiences.append({
+                            "role_id": "copywriter",
+                            "card": retry_agent._pending_experience,
+                            "agent": retry_agent,
+                            "task_filter": {"platform": retry_platform, "is_retry": True},
+                        })
+                except Exception as retry_exc:
+                    logger.warning(
+                        "fan-out 定向重试失败 platform=%s: %s",
+                        retry_platform, retry_exc,
+                    )
+                    print(
+                        f"[Orchestrator] 定向重试 platform={retry_platform} 异常: "
+                        f"{type(retry_exc).__name__}: {retry_exc}"
+                    )
+
+            # 重试后再次检查
+            try:
+                check_rows = await ContentMemory().list_by_project(proj.client_name)
+                empty_rows = [r for r in check_rows if not (r.draft or "").strip()]
+            except Exception:
+                pass
+
+        # ── 7. 完成度判定 + 状态推进 ──
+        all_filled = check_rows and not empty_rows
+        large_missing = empty_rows and len(empty_rows) > 2
+
+        if all_filled:
+            print(
+                f"[Orchestrator] fan-out 完成度检查通过：{len(check_rows)} 条全部成稿，"
+                f"推进状态「撰写中」→「审核中」"
+            )
+            try:
+                await self._pm.update_status("审核中")
+            except Exception as exc:
+                print(f"[Orchestrator] 警告: 状态推进失败: {exc}")
+        elif large_missing:
+            logger.error(
+                "fan-out 大面积缺失：%d/%d 条 draft 为空，保持「撰写中」等待人工介入",
+                len(empty_rows), len(check_rows or []),
+            )
+            empty_details = ", ".join(
+                f"{r.platform or '?'}/{r.record_id[:12]}..."
+                for r in empty_rows[:5]
+            )
+            print(
+                f"[Orchestrator] fan-out 大面积缺失: "
+                f"{len(empty_rows)}/{len(check_rows)} 条为空 ({empty_details}{'...' if len(empty_rows) > 5 else ''})，"
+                f"保持「撰写中」"
+            )
+        elif empty_rows:
+            # 少量缺失（重试后仍存在）— 告警但继续
+            logger.warning(
+                "fan-out 少量缺失（已重试）: %d/%d 条 draft 仍为空",
+                len(empty_rows), len(check_rows or []),
+            )
+
+        # ── 8. 聚合 StageResult ──
+        all_ok = all_filled or (not large_missing and all(v["ok"] for v in final_status.values()))
+        duration = time.perf_counter() - start
+
+        summary_lines = []
+        for platform in group_names:
+            st = final_status[platform]
+            tag = "OK" if st["ok"] else "FAIL"
+            if st.get("retried"):
+                tag += "(retry)"
+            detail = (st.get("output") or "")[:80] if st["ok"] else st.get("error", "")
+            summary_lines.append(f"[{platform}] {tag}: {detail}")
+        if retry_filled > 0:
+            summary_lines.append(f"[retry] 定向重试补写 {retry_filled} 条")
+        if empty_rows:
+            summary_lines.append(
+                f"[gap] {len(empty_rows)}/{len(check_rows or [])} 条仍为空"
+            )
+        stage_output = "fan-out 汇总:\n" + "\n".join(summary_lines)
+
+        failed = [p for p in group_names if not final_status[p]["ok"]]
+        stage_error = "" if not failed else "; ".join(
+            f"{p}: {final_status[p].get('error', '')}" for p in failed
+        )
+        if empty_rows:
+            gap_detail = ", ".join(
+                f"{r.platform or '?'}/{r.record_id[:12]}..." for r in empty_rows
+            )
+            stage_error = (stage_error + "; " if stage_error else "") + f"缺失行: {gap_detail}"
+
         ok_cnt = sum(1 for v in final_status.values() if v["ok"])
         print(
             f"[Orchestrator] fan-out 完成: {ok_cnt}/{len(group_names)} 平台成功, "
-            f"收集 {len(pending_experiences)} 条经验, 总耗时 {duration:.2f}s"
+            f"收集 {len(pending_experiences)} 条经验, 总耗时 {duration:.2f}s, "
+            f"全部成稿={'是' if all_filled else '否'}"
         )
 
         return StageResult(
@@ -868,13 +1093,19 @@ class Orchestrator:
         )
         return "timeout"
 
-    async def _ensure_copywriter_drafts(self, project_name: str) -> None:
-        """文案阶段后兜底：扫 content_rows，对 draft 为空的行用单次 LLM call 补写。
+    # 兜底补写最多重试次数
+    _FALLBACK_MAX_RETRIES = 3
+
+    async def _ensure_copywriter_drafts(self, project_name: str) -> int:
+        """文案阶段后兜底：扫 content_rows，对 draft 为空的行用 LLM 补写（最多 3 次重试）。
 
         底层逻辑：
           - 不走完整 ReAct，单次调 LLM 生成成稿（成本/延时最小化）
           - 兜底补写只调 ContentMemory.write_draft，不进经验池、不经过审核工具
+          - 单条最多重试 _FALLBACK_MAX_RETRIES 次，每次用更直接的 system prompt
           - 任何一条补写失败不影响其余，也不阻断主流程
+
+        返回实际补写成功的行数。
         """
         try:
             cm = ContentMemory()
@@ -882,12 +1113,12 @@ class Orchestrator:
         except Exception as exc:
             logger.exception("文案兜底读取内容行失败")
             print(f"[Orchestrator] 警告: 文案兜底读行失败: {exc}")
-            return
+            return 0
 
         empty_rows = [r for r in rows if not (r.draft or "").strip()]
         if not empty_rows:
             print(f"[Orchestrator] 文案兜底：{len(rows)} 条内容行全部有成稿，跳过")
-            return
+            return 0
 
         print(
             f"[Orchestrator] 文案兜底：{len(empty_rows)}/{len(rows)} 条内容行 draft 为空，启动 LLM 补写"
@@ -908,39 +1139,76 @@ class Orchestrator:
         except Exception as exc:
             logger.exception("文案兜底初始化 LLM 失败")
             print(f"[Orchestrator] 警告: 文案兜底初始化失败: {exc}")
-            return
+            return 0
+
+        # 兜底 LLM system prompts：从宽松到严格，逐次加压
+        _FALLBACK_SYSTEM_PROMPTS = [
+            (
+                "你是资深内容营销文案。按目标平台调性生成完整成稿，"
+                "不要解释、不要使用 ``` 代码块包裹，直接输出正文。"
+                "严禁医疗化、绝对化、虚假宣传用语。"
+            ),
+            (
+                "你必须生成完整的营销成稿正文。直接输出内容，"
+                "一个字都不要解释，不要用代码块。"
+                "即使对平台不熟悉，也要根据内容标题和核心卖点写出可发布的正文。"
+            ),
+            (
+                "I NEED you to write a complete marketing content draft RIGHT NOW. "
+                "Output the draft content DIRECTLY, NO explanations, NO code blocks. "
+                "Write in Chinese. Even if you're uncertain about the platform, "
+                "produce a publishable draft based on the title and key points. "
+                "DO NOT refuse. DO NOT explain. JUST WRITE."
+            ),
+        ]
 
         filled = 0
         for row in empty_rows:
-            try:
-                prompt = self._build_copy_fallback_prompt(proj, row)
-                resp = await client.chat.completions.create(
-                    model=LLM_MODEL,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": (
-                                "你是资深内容营销文案。按目标平台调性生成完整成稿，"
-                                "不要解释、不要使用 ``` 代码块包裹，直接输出正文。"
-                                "严禁医疗化、绝对化、虚假宣传用语。"
-                            ),
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                )
-                draft = (resp.choices[0].message.content or "").strip()
-                if not draft:
-                    continue
-                await cm.write_draft(row.record_id, draft, len(draft))
-                filled += 1
-                print(
-                    f"[Orchestrator] 补写成功 rid={row.record_id[:12]}... "
-                    f"title={row.title[:20]}... 字数={len(draft)}"
-                )
-            except Exception as exc:
-                print(
-                    f"[Orchestrator] 补写失败 rid={row.record_id[:12]}...: "
-                    f"{type(exc).__name__}: {exc}"
+            prompt = self._build_copy_fallback_prompt(proj, row)
+            draft = ""
+            last_error = ""
+
+            for attempt in range(1, self._FALLBACK_MAX_RETRIES + 1):
+                try:
+                    sys_idx = min(attempt - 1, len(_FALLBACK_SYSTEM_PROMPTS) - 1)
+                    sys_prompt = _FALLBACK_SYSTEM_PROMPTS[sys_idx]
+                    resp = await client.chat.completions.create(
+                        model=LLM_MODEL,
+                        messages=[
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": prompt},
+                        ],
+                    )
+                    draft = (resp.choices[0].message.content or "").strip()
+                    if draft:
+                        break
+                    last_error = "LLM 返回空内容"
+                    logger.warning(
+                        "文案兜底补写 attempt=%d/%d rid=%s 返回空内容，%s",
+                        attempt, self._FALLBACK_MAX_RETRIES, row.record_id[:12],
+                        "将重试" if attempt < self._FALLBACK_MAX_RETRIES else "已达上限",
+                    )
+                except Exception as exc:
+                    last_error = f"{type(exc).__name__}: {exc}"
+                    logger.warning(
+                        "文案兜底补写 attempt=%d/%d rid=%s 异常: %s",
+                        attempt, self._FALLBACK_MAX_RETRIES, row.record_id[:12], last_error,
+                    )
+
+            if draft:
+                try:
+                    await cm.write_draft(row.record_id, draft, len(draft))
+                    filled += 1
+                    print(
+                        f"[Orchestrator] 补写成功 rid={row.record_id[:12]}... "
+                        f"title={row.title[:20]}... 字数={len(draft)}"
+                    )
+                except Exception as exc:
+                    logger.exception("补写 write_draft 失败 rid=%s: %s", row.record_id[:12], exc)
+            else:
+                logger.error(
+                    "文案兜底补写彻底失败 rid=%s 平台=%s title=%s: %s",
+                    row.record_id[:12], row.platform, (row.title or "")[:30], last_error,
                 )
 
         self._publish("copywriter.fallback.completed", {
@@ -952,23 +1220,37 @@ class Orchestrator:
             title="文案补写兜底",
             content=(
                 f"检测到 {len(empty_rows)}/{len(rows)} 条内容缺成稿，"
-                f"已自动补写 {filled} 条"
+                f"已自动补写 {filled} 条" +
+                (f"，仍有 {len(empty_rows) - filled} 条为空" if filled < len(empty_rows) else "")
             ),
-            color="blue" if filled == len(empty_rows) else "orange",
+            color="blue" if filled == len(empty_rows) else "red",
         )
+
+        return filled
 
     @staticmethod
     def _build_copy_fallback_prompt(proj: BriefProject, row) -> str:
+        # 平台字数参考表
+        _WORD_COUNT_HINT = {
+            "小红书": "400-800",
+            "抖音": "200-400（分镜脚本格式）",
+            "视频号": "150-300",
+            "公众号": "800-1500",
+            "微博": "140-300",
+        }
+        wc_hint = _WORD_COUNT_HINT.get(row.platform or "", "300-500")
+
         parts = [
             "# 项目上下文",
-            f"- 客户: {proj.client_name}",
+            f"- 客户: {proj.client_name or '未填'}",
         ]
         if proj.project_type:
             parts.append(f"- 项目类型: {proj.project_type}")
         if proj.brand_tone:
             parts.append(f"- 品牌调性: {proj.brand_tone}")
-        if proj.dept_style:
+        if (proj.dept_style or "").strip():
             parts.append(f"- 部门风格: {proj.dept_style}")
+
         parts += [
             "",
             "# 本条任务",
@@ -979,9 +1261,9 @@ class Orchestrator:
             f"- 目标人群: {row.target_audience or '未填'}",
             "",
             "# 输出要求",
+            f"- 目标平台 {row.platform}，参考字数 {wc_hint}",
             "- 直接输出完整成稿正文，不要任何解释",
-            "- 字数参考：小红书 400-800、抖音脚本 200-400、公众号 800-1500",
-            "- 正文顶部用 <!-- 对标参考 + 合规自检 --> HTML 注释占位（一行即可）",
+            "- 正文顶部用 <!-- 未命中精准对标，已用平台通用结构撰写 --> HTML 注释占位（一行即可）",
         ]
         return "\n".join(parts)
 
