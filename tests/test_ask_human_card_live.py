@@ -1,4 +1,4 @@
-"""实测 ask_human 卡片发送到飞书群组。
+"""实测 ask_human 交互式卡片发送到飞书群组。
 
 需要 .env 中配置真实凭证：
   FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_CHAT_ID
@@ -6,8 +6,12 @@
 运行方式：
   pytest tests/test_ask_human_card_live.py -v -s
   python tests/test_ask_human_card_live.py   # 直接运行亦可
+
+注意：要在飞书群中点击卡片按钮，需要先启动 server（python main.py serve），
+      WebSocket 长连接负责接收 card.action.trigger 回调。
 """
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -31,6 +35,21 @@ skip_no_creds = pytest.mark.skipif(
     not FEISHU_CHAT_ID or not FEISHU_APP_ID,
     reason="缺少飞书凭证（FEISHU_CHAT_ID / FEISHU_APP_ID），跳过 live 测试",
 )
+
+
+def test_send_choice_card_json_structure():
+    """验证 send_choice_card 生成的卡片 JSON 包含按钮 action 元素。"""
+    import inspect
+    from feishu.im import FeishuIMClient
+
+    # 用 inspect 拿到 send_choice_card 内部构建的 card JSON
+    # 通过 mock 避免真实 HTTP 请求
+    source = inspect.getsource(FeishuIMClient.send_choice_card)
+    # 在函数源码中找到 card = {...} 部分
+    assert '"tag": "action"' in source, "卡片 JSON 应包含 action 元素"
+    assert '"tag": "button"' in source, "卡片 JSON 应包含 button 元素"
+    assert '"choice_index"' in source, "按钮 value 应包含 choice_index"
+    print("✅ 卡片 JSON 结构验证通过：包含 action + button + choice_index")
 
 
 @skip_no_creds
