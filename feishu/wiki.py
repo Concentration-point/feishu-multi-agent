@@ -10,6 +10,7 @@ import httpx
 from config import FEISHU_BASE_URL
 from feishu.auth import TokenManager
 from feishu.bitable import FeishuAPIError
+from feishu.wiki_markdown import _LANGUAGE_REVERSE_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -417,14 +418,16 @@ class FeishuWikiClient:
         """写入结构化交付文档。
 
         每个 block 为 dict，支持以下 type：
-        - {"type": "heading1", "text": "..."}
+        - {"type": "heading1", "text": "..."}  或  {"type": "heading1", "elements": [...]}
         - {"type": "heading2", "text": "..."}
         - {"type": "heading3", "text": "..."}
-        - {"type": "text", "text": "...", "bold": False}
+        - {"type": "text", "text": "...", "bold": False}  或  {"type": "text", "elements": [...]}
         - {"type": "divider"}
         - {"type": "callout", "text": "...", "emoji": "📊", "bg_color": 5}
            bg_color: 1红 2橙 3黄 4绿 5蓝 6紫 7灰
-        - {"type": "bullet", "text": "..."}
+        - {"type": "bullet", "text": "..."}  或  {"type": "bullet", "elements": [...]}
+        - {"type": "ordered", "text": "..."}  或  {"type": "ordered", "elements": [...]}
+        - {"type": "code", "text": "...", "language": "python"}
         - {"type": "table", "rows": [["H1","H2"], ["A","B"]]}
         - {"type": "image", "data": bytes, "name": "chart.png"}
         """
@@ -437,10 +440,13 @@ class FeishuWikiClient:
             if btype in ("heading1", "heading2", "heading3"):
                 bt_map = {"heading1": 3, "heading2": 4, "heading3": 5}
                 field_map = {"heading1": "heading1", "heading2": "heading2", "heading3": "heading3"}
+                elements = block.get("elements")
+                if elements is None:
+                    elements = [{"text_run": {"content": block["text"]}}]
                 child = {
                     "block_type": bt_map[btype],
                     field_map[btype]: {
-                        "elements": [{"text_run": {"content": block["text"]}}],
+                        "elements": elements,
                         "style": {},
                     },
                 }
@@ -448,9 +454,11 @@ class FeishuWikiClient:
                 current_index += 1
 
             elif btype == "text":
-                elements = [{"text_run": {"content": block["text"]}}]
-                if block.get("bold"):
-                    elements = [{"text_run": {"content": block["text"], "text_element_style": {"bold": True}}}]
+                elements = block.get("elements")
+                if elements is None:
+                    elements = [{"text_run": {"content": block["text"]}}]
+                    if block.get("bold"):
+                        elements = [{"text_run": {"content": block["text"], "text_element_style": {"bold": True}}}]
                 child = {
                     "block_type": 2,
                     "text": {"elements": elements, "style": {}},
@@ -458,12 +466,31 @@ class FeishuWikiClient:
                 await self._append_children(document_id, root_id, [child], start_index=current_index)
                 current_index += 1
 
-            elif btype == "bullet":
+            elif btype in ("bullet", "ordered"):
+                bt = 12 if btype == "bullet" else 13
+                field = "bullet" if btype == "bullet" else "ordered"
+                elements = block.get("elements")
+                if elements is None:
+                    elements = [{"text_run": {"content": block["text"]}}]
                 child = {
-                    "block_type": 12,
-                    "bullet": {
-                        "elements": [{"text_run": {"content": block["text"]}}],
+                    "block_type": bt,
+                    field: {
+                        "elements": elements,
                         "style": {},
+                    },
+                }
+                await self._append_children(document_id, root_id, [child], start_index=current_index)
+                current_index += 1
+
+            elif btype == "code":
+                lang = block.get("language", "plain")
+                lang_code = _LANGUAGE_REVERSE_MAP.get(lang.lower(), 1)
+                code_text = block.get("text", "")
+                child = {
+                    "block_type": 14,
+                    "code": {
+                        "elements": [{"text_run": {"content": code_text}}],
+                        "style": {"language": lang_code, "wrap": True},
                     },
                 }
                 await self._append_children(document_id, root_id, [child], start_index=current_index)

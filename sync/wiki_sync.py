@@ -13,6 +13,7 @@ from pathlib import Path
 
 from config import KNOWLEDGE_BASE_PATH
 from feishu.wiki import FeishuWikiClient, FeishuAPIError
+from feishu.wiki_markdown import markdown_to_docx_blocks
 from tools.write_wiki import prepare_docx_markdown, prepare_docx_plaintext
 
 logger = logging.getLogger(__name__)
@@ -210,11 +211,12 @@ class WikiSyncService:
     async def _sync_file(self, rel_path: str, full_path: Path) -> str:
         """将单个文件同步到飞书知识空间。返回实际使用的同步模式。"""
         raw_content = full_path.read_text(encoding="utf-8")
-        content = prepare_docx_markdown(raw_content)
         sync_mode = "markdown"
         if rel_path.startswith("10_经验沉淀/"):
             content = prepare_docx_plaintext(raw_content)
             sync_mode = "plain_safe"
+        else:
+            content = prepare_docx_markdown(raw_content)
 
         # 映射飞书节点路径
         parent_title, doc_title = self._map_node_path(rel_path)
@@ -231,7 +233,7 @@ class WikiSyncService:
         if existing:
             obj_token = existing.get("obj_token", "")
             if obj_token:
-                await self._wiki.update_doc_content(obj_token, content)
+                await self._write_content(obj_token, content, sync_mode)
                 logger.info("[WikiSync] 更新文档: %s → %s (%s)", rel_path, doc_title, sync_mode)
         else:
             node = await self._wiki.create_node(
@@ -239,9 +241,17 @@ class WikiSyncService:
             )
             obj_token = node.get("obj_token", "")
             if obj_token:
-                await self._wiki.update_doc_content(obj_token, content)
+                await self._write_content(obj_token, content, sync_mode)
             logger.info("[WikiSync] 创建文档: %s → %s (%s)", rel_path, doc_title, sync_mode)
         return sync_mode
+
+    async def _write_content(self, obj_token: str, content: str, sync_mode: str) -> None:
+        """根据同步模式写入文档内容。markdown 模式走结构化写入，plain_safe 走纯文本。"""
+        if sync_mode == "markdown":
+            blocks = markdown_to_docx_blocks(content)
+            await self._wiki.write_delivery_doc(obj_token, blocks)
+        else:
+            await self._wiki.update_doc_content(obj_token, content)
 
     # ── 飞书父节点中文名映射 ──
     #

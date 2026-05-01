@@ -333,3 +333,293 @@ _LANGUAGE_MAP = {
 
 def _language_name(code: int) -> str:
     return _LANGUAGE_MAP.get(int(code or 0), "")
+
+
+_LANGUAGE_REVERSE_MAP: dict[str, int] = {v: k for k, v in _LANGUAGE_MAP.items()}
+
+
+# ─────────────────────────────────────────────────────────────────────
+#  Markdown → 飞书 docx blocks 正向转换器
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _parse_inline_elements(text: str) -> list[dict]:
+    """把一行文本中的 markdown inline 格式解析为飞书 text_run 元素数组。
+
+    支持：**bold** *italic* ~~strikethrough~~ `inline_code` [text](url)
+    """
+    if not text:
+        return [{"text_run": {"content": ""}}]
+
+    elements: list[dict] = []
+    i = 0
+    buf: list[str] = []
+
+    def flush_buf() -> None:
+        if buf:
+            elements.append({"text_run": {"content": "".join(buf)}})
+            buf.clear()
+
+    while i < len(text):
+        # ---- **bold** ----
+        if text[i : i + 2] == "**" and i + 2 < len(text):
+            end = text.find("**", i + 2)
+            if end != -1:
+                flush_buf()
+                inner = text[i + 2 : end]
+                if inner:
+                    elements.append({
+                        "text_run": {
+                            "content": inner,
+                            "text_element_style": {"bold": True},
+                        }
+                    })
+                i = end + 2
+                continue
+
+        # ---- ~~strikethrough~~ ----
+        if text[i : i + 2] == "~~" and i + 2 < len(text):
+            end = text.find("~~", i + 2)
+            if end != -1:
+                flush_buf()
+                inner = text[i + 2 : end]
+                if inner:
+                    elements.append({
+                        "text_run": {
+                            "content": inner,
+                            "text_element_style": {"strikethrough": True},
+                        }
+                    })
+                i = end + 2
+                continue
+
+        # ---- `inline_code` ----
+        if text[i] == "`":
+            end = text.find("`", i + 1)
+            if end != -1:
+                flush_buf()
+                inner = text[i + 1 : end]
+                if inner:
+                    elements.append({
+                        "text_run": {
+                            "content": inner,
+                            "text_element_style": {"inline_code": True},
+                        }
+                    })
+                i = end + 1
+                continue
+
+        # ---- *italic* (single * only, not **) ----
+        if (
+            text[i] == "*"
+            and (i == 0 or text[i - 1] != "*")
+            and i + 1 < len(text)
+            and text[i + 1] != "*"
+        ):
+            end = text.find("*", i + 1)
+            if end != -1:
+                flush_buf()
+                inner = text[i + 1 : end]
+                if inner:
+                    elements.append({
+                        "text_run": {
+                            "content": inner,
+                            "text_element_style": {"italic": True},
+                        }
+                    })
+                i = end + 1
+                continue
+
+        # ---- [text](url) ----
+        if text[i] == "[":
+            close_b = text.find("](", i + 1)
+            if close_b != -1:
+                close_p = text.find(")", close_b + 2)
+                if close_p != -1:
+                    flush_buf()
+                    link_text = text[i + 1 : close_b]
+                    link_url = text[close_b + 2 : close_p]
+                    style: dict = {"link": {"url": link_url}}
+                    elements.append({
+                        "text_run": {
+                            "content": link_text,
+                            "text_element_style": style,
+                        }
+                    })
+                    i = close_p + 1
+                    continue
+
+        buf.append(text[i])
+        i += 1
+
+    flush_buf()
+    return elements
+
+
+def markdown_to_docx_blocks(text: str) -> list[dict]:
+    """将 markdown 文本转换为 write_delivery_doc() 可用的 block 列表。
+
+    支持的块级元素：
+    - #/##/### 标题
+    - 空行分隔的段落
+    - - / * 无序列表
+    - 1. 有序列表
+    - ``` 围栏代码块
+    - > 引用块
+    - --- 分割线
+    - GFM 表格
+    """
+    import re as _re
+
+    lines = text.split("\n")
+    blocks: list[dict] = []
+    i = 0
+    n = len(lines)
+
+    def _peek_stripped(offset: int) -> str:
+        if 0 <= offset < n:
+            return lines[offset].strip()
+        return ""
+
+    while i < n:
+        stripped = lines[i].strip()
+
+        # 空行 → 跳过
+        if not stripped:
+            i += 1
+            continue
+
+        # ── 围栏代码块 ──
+        if stripped.startswith("```"):
+            lang = stripped[3:].strip()
+            i += 1
+            code_lines: list[str] = []
+            while i < n and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1  # 跳过关闭 ```
+            code_text = "\n".join(code_lines)
+            blocks.append({
+                "type": "code",
+                "text": code_text,
+                "language": lang or "plain",
+            })
+            continue
+
+        # ── 标题 # / ## / ### ──
+        m = _re.match(r"^(#{1,3})\s+(.+)$", stripped)
+        if m:
+            level = len(m.group(1))
+            blocks.append({
+                "type": f"heading{level}",
+                "elements": _parse_inline_elements(m.group(2).strip()),
+            })
+            i += 1
+            continue
+
+        # ── 分割线 --- / *** ──
+        if _re.match(r"^[-*_]{3,}\s*$", stripped):
+            blocks.append({"type": "divider"})
+            i += 1
+            continue
+
+        # ── 引用 > ──
+        if stripped.startswith(">"):
+            quote_lines: list[str] = []
+            while i < n and lines[i].strip().startswith(">"):
+                q = lines[i].strip()[1:].strip()
+                quote_lines.append(q)
+                i += 1
+            blocks.append({
+                "type": "callout",
+                "text": "\n".join(quote_lines),
+                "emoji": "speech_balloon",
+                "bg_color": 7,
+            })
+            continue
+
+        # ── 无序列表 - / * ──
+        m_ul = _re.match(r"^[-*]\s+(.+)$", stripped)
+        if m_ul:
+            ul_items: list[str] = []
+            while i < n:
+                s = lines[i].strip()
+                m2 = _re.match(r"^[-*]\s+(.+)$", s)
+                if not m2:
+                    break
+                ul_items.append(m2.group(1))
+                i += 1
+            for item_txt in ul_items:
+                blocks.append({
+                    "type": "bullet",
+                    "elements": _parse_inline_elements(item_txt),
+                })
+            continue
+
+        # ── 有序列表 1. ──
+        m_ol = _re.match(r"^\d+\.\s+(.+)$", stripped)
+        if m_ol:
+            ol_items: list[str] = []
+            while i < n:
+                s = lines[i].strip()
+                m2 = _re.match(r"^\d+\.\s+(.+)$", s)
+                if not m2:
+                    break
+                ol_items.append(m2.group(1))
+                i += 1
+            for item_txt in ol_items:
+                blocks.append({
+                    "type": "ordered",
+                    "elements": _parse_inline_elements(item_txt),
+                })
+            continue
+
+        # ── GFM 表格 ──
+        if "|" in stripped and i + 1 < n and _re.match(r"^\s*\|?[\s\-:|]+\|?\s*$", _peek_stripped(i + 1)):
+            table_rows: list[list[str]] = []
+            while i < n:
+                s = lines[i].strip()
+                if "|" not in s:
+                    break
+                cells = [c.strip() for c in s.strip("|").split("|")]
+                table_rows.append(cells)
+                i += 1
+            if len(table_rows) >= 2:
+                # 跳过分隔行 (|---|---|)
+                data_rows = [table_rows[0]]
+                for tr in table_rows[1:]:
+                    if all(_re.match(r"^[\s\-:]+$", c) for c in tr):
+                        continue
+                    data_rows.append(tr)
+                blocks.append({"type": "table", "rows": data_rows, "header_row": True})
+                continue
+            # 不是表格，回退
+            i -= len(table_rows) - 1
+            table_rows.clear()
+
+        # ── 普通段落 ──
+        para_lines: list[str] = []
+        while i < n:
+            s = lines[i].strip()
+            if not s:
+                break
+            # 遇到块级标记停
+            if (
+                s.startswith("#")
+                or s.startswith("```")
+                or s.startswith(">")
+                or _re.match(r"^[-*]\s+", s)
+                or _re.match(r"^\d+\.\s+", s)
+                or _re.match(r"^[-*_]{3,}\s*$", s)
+            ):
+                break
+            para_lines.append(s)
+            i += 1
+        if para_lines:
+            para_text = " ".join(para_lines)
+            blocks.append({
+                "type": "text",
+                "elements": _parse_inline_elements(para_text),
+            })
+
+    return blocks
