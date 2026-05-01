@@ -334,7 +334,8 @@ class Orchestrator:
                 )
 
             # ── 文案完成后二次兜底：fan-out 已做完成度检查 + 重试，此处为安全网 ──
-            if role_id == "copywriter" and result.ok:
+            # 无论 fan-out 返回 ok=True/False 都执行安全网（部分完成带缺口时 ok=False 但仍需兜底）
+            if role_id == "copywriter":
                 filled = await self._ensure_copywriter_drafts(project_name)
 
                 # 安全网：兜底后再次确认，仍有空行则阻断
@@ -347,8 +348,9 @@ class Orchestrator:
                     still_empty = []
 
                 if rows and not still_empty:
-                    # fan-out 应该已经推了状态，这里只做确认
-                    if current_status == "撰写中":
+                    # 重新读取 Bitable 最新状态（fan-out 可能已推进），避免用捕获的陈旧状态
+                    fresh_status = await self._read_current_status()
+                    if fresh_status == "撰写中":
                         print(
                             f"[Orchestrator] 文案安全网：{len(rows)} 条全部成稿，"
                             f"补充推进状态「撰写中」→「审核中」"
@@ -369,7 +371,8 @@ class Orchestrator:
                         f"{len(still_empty)}/{len(rows)} 条仍为空 ({empty_details})"
                     )
                     # 子 Agent 不再推状态，但如果外部原因导致状态已是审核中则回退
-                    if current_status == "审核中":
+                    fresh_status = await self._read_current_status()
+                    if fresh_status == "审核中":
                         print(
                             f"[Orchestrator] 文案安全网：回退状态「审核中」→「撰写中」以待重试"
                         )
@@ -666,13 +669,18 @@ class Orchestrator:
 
         parallel_start = time.perf_counter()
         tasks = [_run_with_sem(k) for k in group_names]
-        raw_results = await asyncio.gather(*tasks)
+        raw_results = await asyncio.gather(*tasks, return_exceptions=True)
         parallel_duration = time.perf_counter() - parallel_start
         print(f"[Orchestrator] fan-out 并行执行完成, 耗时 {parallel_duration:.2f}s")
 
         # 失败组串行重试
         final_status: dict[str, dict] = {}
-        for platform, output, agent, error in raw_results:
+        for result in raw_results:
+            if isinstance(result, BaseException):
+                logger.error("fan-out 子任务抛非 Exception 异常（如 CancelledError），结果丢失: %s", result)
+                print(f"[Orchestrator] 错误: fan-out 子任务异常退出: {type(result).__name__}: {result}")
+                continue
+            platform, output, agent, error = result
             if error:
                 logger.warning(
                     "[fan-out] platform=%s 首次失败: %s, 准备串行重试",
@@ -842,7 +850,8 @@ class Orchestrator:
             )
 
         # ── 8. 聚合 StageResult ──
-        all_ok = all_filled or (not large_missing and all(v["ok"] for v in final_status.values()))
+        all_ok = all_filled  # 严格：仅当全部成稿才算完成；部分完成=未完成
+        partial_gap = not all_filled and not large_missing and empty_rows
         duration = time.perf_counter() - start
 
         summary_lines = []
@@ -859,6 +868,8 @@ class Orchestrator:
             summary_lines.append(
                 f"[gap] {len(empty_rows)}/{len(check_rows or [])} 条仍为空"
             )
+        if partial_gap:
+            summary_lines.append("[partial] 部分完成带缺口 — 少量缺失但非大面积阻塞")
         stage_output = "fan-out 汇总:\n" + "\n".join(summary_lines)
 
         failed = [p for p in group_names if not final_status[p]["ok"]]
@@ -872,10 +883,14 @@ class Orchestrator:
             stage_error = (stage_error + "; " if stage_error else "") + f"缺失行: {gap_detail}"
 
         ok_cnt = sum(1 for v in final_status.values() if v["ok"])
+        completion_label = (
+            "全部完成" if all_filled
+            else ("部分完成带缺口" if partial_gap else "未完成（大面积缺失）")
+        )
         print(
-            f"[Orchestrator] fan-out 完成: {ok_cnt}/{len(group_names)} 平台成功, "
+            f"[Orchestrator] fan-out {completion_label}: {ok_cnt}/{len(group_names)} 平台成功, "
             f"收集 {len(pending_experiences)} 条经验, 总耗时 {duration:.2f}s, "
-            f"全部成稿={'是' if all_filled else '否'}"
+            f"成稿 {len([r for r in (check_rows or []) if (r.draft or '').strip()])}/{len(check_rows or [])}"
         )
 
         return StageResult(
