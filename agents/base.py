@@ -514,6 +514,15 @@ class BaseAgent:
         self._tools_config = self._registry.get_tools(self.soul.tools)
         self._project_memory_factory = project_memory_factory or ProjectMemory
 
+        # 启动时校验：必调工具必须在 soul.md 白名单中
+        _required = _REQUIRED_TOOL_CALLS.get(role_id, [])
+        _missing_in_whitelist = [t for t in _required if t not in self.soul.tools]
+        if _missing_in_whitelist:
+            raise ValueError(
+                f"[{role_id}] 必调工具 {_missing_in_whitelist} 不在 soul.md 工具白名单中，"
+                f"请在 agents/{role_id}/soul.md 的 tools: 列表中补齐"
+            )
+
         # LLM 客户端
         self._llm = llm_client or AsyncOpenAI(
             base_url=LLM_BASE_URL,
@@ -986,7 +995,7 @@ class BaseAgent:
                 "role": "user",
                 "content": (
                     f"⚠️ 工具合规校验：你在本次工作中还未调用必须工具 {missing}。\n"
-                    f"请立即调用这些工具完成必要操作，然后输出最终结论。{extra}"
+                    f"请**立即**逐个调用这些工具，不要输出文字解释，直接发起 tool_call。{extra}"
                 ),
             })
             # mini-loop：tool call → tool result → final text（最多 _POST_VALIDATION_MINI_ITERS 步）

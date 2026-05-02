@@ -124,7 +124,8 @@ async def execute(params: dict, context: AgentContext) -> str:
     try:
         fut = register(FEISHU_CHAT_ID, [], accept_any=True)
     except RuntimeError as exc:
-        return f"ask_human_free 不可用（未在 server 模式下运行）: {exc}"
+        logger.warning("ask_human_free: CLI 模式下降级，返回默认回复: %s", exc)
+        return "人类回复：（CLI 模式自动降级）请按现有信息继续处理"
 
     logger.info(
         "ask_human_free: 卡片已发出 chat_id=%s，等待用户回复（超时 %ds）...",

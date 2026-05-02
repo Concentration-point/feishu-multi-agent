@@ -4,6 +4,7 @@
 - （暂无独立架构文档，参见 `CLAUDE.md`）
 
 ## 工作流文档
+- `workflow/250502-api-test-diagnostic.md` — 全链路 API 测试诊断报告（进行中：P0/P1 待修复）
 - `workflow/done/250426-full-audit.md` — 全模块审计（已完成）
 - `workflow/done/260501-agent-soul-audit.md` — 策略师/PM/数据分析师灵魂审计（已完成）
 

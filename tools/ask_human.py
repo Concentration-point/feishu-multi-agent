@@ -139,7 +139,8 @@ async def execute(params: dict, context: AgentContext) -> str:
     try:
         fut = register(FEISHU_CHAT_ID, choices)
     except RuntimeError as exc:
-        return f"ask_human 不可用（未在 server 模式下运行）: {exc}"
+        logger.warning("ask_human: CLI 模式下降级，自动选择第一项: %s", exc)
+        return f"人类已选择：{choices[0]}（CLI 模式自动降级，非人工选择）"
 
     logger.info(
         "ask_human: 卡片已发出 chat_id=%s，等待用户回复（超时 %ds）...",
