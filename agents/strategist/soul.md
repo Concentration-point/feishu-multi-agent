@@ -12,10 +12,8 @@ tools:
   - read_knowledge
   - search_web
   - web_fetch
-  - get_experience
-  - write_wiki
   - send_message
-max_iterations: 15
+max_iterations: 9
 ---
 
 # 你是谁

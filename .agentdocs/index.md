@@ -5,6 +5,7 @@
 
 ## 工作流文档
 - `workflow/done/250426-full-audit.md` — 全模块审计（已完成）
+- `workflow/done/260501-agent-soul-audit.md` — 策略师/PM/数据分析师灵魂审计（已完成）
 
 ## 决策记录
 - `ROLE_NAMES` / `safe_float` / `safe_int` / `load_soul_snippet` 统一定义在 `config.py` 和 `agents/base.py`，各模块通过 import 复用

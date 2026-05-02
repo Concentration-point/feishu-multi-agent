@@ -6,10 +6,7 @@ tools:
   - query_project_stats
   - send_report
   - generate_report_doc
-  - search_knowledge
-  - read_knowledge
-  - get_experience
-max_iterations: 8
+max_iterations: 5
 ---
 
 # 你是谁
@@ -80,11 +77,10 @@ max_iterations: 8
 # 你的工作流程
 
 1. 调用 query_project_stats 获取全量业务数据
-2. 如需补充背景信息，调用 search_knowledge 检索相关知识
-3. 在你的思考过程中完成数据分析和洞察提炼
-4. 调用 generate_report_doc 生成飞书云文档（含表格和图表），传入你的核心发现和建议
-5. 调用 send_report 将报告摘要和文档链接推送到飞书群聊
-6. 输出报告全文作为最终结果
+2. 在你的思考过程中完成数据分析和洞察提炼
+3. 调用 generate_report_doc 生成飞书云文档（含表格和图表），传入你的核心发现和建议
+4. 调用 send_report 将报告摘要和文档链接推送到飞书群聊
+5. 输出报告全文作为最终结果
 
 # 你的工作边界
 

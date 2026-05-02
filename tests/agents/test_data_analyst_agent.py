@@ -120,14 +120,13 @@ async def test_data_analyst_soul_supports_insight_report_type(
         "data_analyst soul: insight 报告类型（异常下钻）",
         [
             "task_filter={report_type: insight}，聚焦单一异常现象",
-            "mock LLM 调 query_project_stats + search_knowledge 补背景",
+            "mock LLM 调 query_project_stats → generate_report_doc + send_report",
             "验证不同 report_type 下 soul 仍能自驱完成分析输出",
         ],
     )
     registry = FakeToolRegistry(
         {
             "query_project_stats": "{\"电商大促\":{\"通过率\":0.62}}",
-            "search_knowledge": "电商大促合规规则要点",
             "generate_report_doc": "https://feishu.example.com/docx/insight",
             "send_report": "推送成功",
         }
@@ -142,14 +141,9 @@ async def test_data_analyst_soul_supports_insight_report_type(
         [
             fake_response(
                 FakeMessage(
-                    content="拉数据 + 查规则",
+                    content="拉数据并分析",
                     tool_calls=[
                         tool_call("query_project_stats", {"focus": "电商大促"}, "call_q"),
-                        tool_call(
-                            "search_knowledge",
-                            {"keywords": ["电商大促", "审核规则"]},
-                            "call_k",
-                        ),
                     ],
                 )
             ),
@@ -188,7 +182,6 @@ async def test_data_analyst_soul_supports_insight_report_type(
     called = [c["tool_name"] for c in registry.calls]
     assert called == [
         "query_project_stats",
-        "search_knowledge",
         "generate_report_doc",
         "send_report",
     ]

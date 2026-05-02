@@ -327,15 +327,26 @@ def load_soul_with_platform_patch(
 
 # ── 共享知识分层加载（方案B：语义角色映射）──
 
-# 所有 Agent 都需要的公司级底座 + 方法论（新分层真相源）
+# 所有 Agent 都需要的公司级底座（02_服务方法论 按角色细分，不再全量灌入）
 _COMMON_KNOWLEDGE_DIRS: tuple[str, ...] = (
     "01_企业底座",
-    "02_服务方法论",
 )
 
-# 按 role_id 额外附加的知识包
-# 注：raw/rules 已归位到 02_服务方法论/ + 04_平台打法/，这里不再单独声明
-# 规则库已被 _COMMON_KNOWLEDGE_DIRS 的 02 覆盖，角色专属只剩平台打法
+# 02_服务方法论 中所有角色共需的文件
+_COMMON_METHOD_FILES: tuple[str, ...] = (
+    "内容生产主流程.md",
+    "项目类型SOP补充.md",
+)
+
+# 02_服务方法论 中按 role_id 细分的文件（不在此列的角色只拿 _COMMON_METHOD_FILES）
+_ROLE_METHOD_FILES: dict[str, tuple[str, ...]] = {
+    "account_manager": ("Brief 解读规则.md",),
+    "copywriter":      ("事实核查要点.md", "品牌调性检查清单.md", "广告法禁用词.md"),
+    "reviewer":        ("事实核查要点.md", "品牌调性检查清单.md", "广告法禁用词.md",
+                        "审核规则与风险边界.md", "质量红线标准.md"),
+}
+
+# 按 role_id 额外附加的知识目录
 _ROLE_KNOWLEDGE_DIRS: dict[str, tuple[str, ...]] = {
     "strategist": ("04_平台打法",),
     "copywriter": ("04_平台打法",),
@@ -362,24 +373,52 @@ def _load_dir_markdown(kb_root: Path, rel_dir: str) -> list[str]:
     return parts
 
 
-def load_shared_knowledge(role_id: str | None = None) -> str:
-    """加载分层知识：公共底座（01+02）+ 角色专属包。
+def _load_method_files(kb_root: Path, filenames: tuple[str, ...]) -> list[str]:
+    """精确加载 02_服务方法论/ 下的指定文件。"""
+    method_dir = kb_root / "02_服务方法论"
+    if not method_dir.exists():
+        return []
+    parts: list[str] = []
+    for name in filenames:
+        md = method_dir / name
+        if not md.exists():
+            continue
+        try:
+            text = md.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        rel = md.relative_to(kb_root).as_posix()
+        parts.append(f"<!-- source: {rel} -->\n{text}")
+    return parts
 
-    - role_id=None 或未命中：只返回公共底座，兼容旧测试
-    - role_id 命中 _ROLE_KNOWLEDGE_DIRS：追加 04_平台打法 / raw/rules
-    - 每篇文件前加 HTML 注释标注源路径，便于 Agent 追溯
+
+def load_shared_knowledge(role_id: str | None = None) -> str:
+    """加载分层知识：公共底座（01）+ 02方法论按角色精确选取 + 角色专属目录。
+
+    - 01_企业底座：全量加载（所有角色共享）
+    - 02_服务方法论：公共文件（内容生产主流程 + 项目类型SOP）+ 角色专属文件
+    - 04_平台打法等：按 _ROLE_KNOWLEDGE_DIRS 追加
     - 兜底：若新分层空则回读旧 agents/_shared/*.md
     """
     from config import KNOWLEDGE_BASE_PATH
     kb_root = Path(KNOWLEDGE_BASE_PATH).resolve()
 
-    dirs: list[str] = list(_COMMON_KNOWLEDGE_DIRS)
-    if role_id and role_id in _ROLE_KNOWLEDGE_DIRS:
-        dirs.extend(_ROLE_KNOWLEDGE_DIRS[role_id])
-
     parts: list[str] = []
-    for d in dirs:
+
+    # 1) 公共目录（01_企业底座）
+    for d in _COMMON_KNOWLEDGE_DIRS:
         parts.extend(_load_dir_markdown(kb_root, d))
+
+    # 2) 02_服务方法论：公共文件 + 角色专属文件
+    method_files = list(_COMMON_METHOD_FILES)
+    if role_id and role_id in _ROLE_METHOD_FILES:
+        method_files.extend(_ROLE_METHOD_FILES[role_id])
+    parts.extend(_load_method_files(kb_root, tuple(method_files)))
+
+    # 3) 角色专属目录（04_平台打法 等）
+    if role_id and role_id in _ROLE_KNOWLEDGE_DIRS:
+        for d in _ROLE_KNOWLEDGE_DIRS[role_id]:
+            parts.extend(_load_dir_markdown(kb_root, d))
 
     # 兜底：新分层为空时回退到旧 _shared/
     if not parts:
@@ -481,6 +520,7 @@ class BaseAgent:
             api_key=LLM_API_KEY,
             timeout=LLM_TIMEOUT_SECONDS,
             max_retries=LLM_MAX_RETRIES,
+            default_headers={"User-Agent": "Mozilla/5.0"},
         )
 
         # 经验暂存（Hook 蒸馏后自主写入 wiki，也供 Orchestrator 写 Bitable）
