@@ -456,7 +456,21 @@ function aggregate(events: PipelineEvent[]): EventSnapshot {
           const rid = asString(a.content_record_id);
           const field = asString(a.field_name);
           const value = asString(a.value);
-          const row = snap.contentRows.get(rid);
+          let row = snap.contentRows.get(rid);
+          // pending 替换失败时兜底：用真实 record_id 自动建行，避免正文静默丢失
+          if (!row && rid && field === "draft_content") {
+            row = {
+              record_id: rid,
+              sequence: snap.draftOrder.length + 1,
+              title: `Draft ${snap.draftOrder.length + 1}`,
+              platform: "",
+              content_type: "",
+              key_message: "",
+              target_audience: "",
+            };
+            snap.contentRows.set(rid, row);
+            snap.draftOrder.push(rid);
+          }
           if (row) {
             if (field === "draft_content") row.draft_content = value;
             else if (field === "word_count") row.word_count = Number(value) || undefined;
@@ -760,6 +774,26 @@ function aggregate(events: PipelineEvent[]): EventSnapshot {
                 if (orderIdx >= 0) snap.draftOrder[orderIdx] = realRid;
                 pendingByOrder[startIdx + i] = realRid;
               }
+            }
+          }
+        }
+
+        // create_content 回包：从结果字符串提取 record_id，替换 pending:${sequence}
+        // create_content 工具返回格式："内容行已创建，record_id=recviz..."
+        if (name === "create_content" && match) {
+          const a = match.args as Record<string, unknown>;
+          const seq = asString(a.sequence);
+          const pendingRid = `pending:${seq}`;
+          const m = result.match(/record_id[=：]\s*([A-Za-z0-9]+)/);
+          if (m) {
+            const realRid = m[1];
+            const row = snap.contentRows.get(pendingRid);
+            if (row && realRid && realRid !== pendingRid) {
+              const newRow = { ...row, record_id: realRid };
+              snap.contentRows.delete(pendingRid);
+              snap.contentRows.set(realRid, newRow);
+              const orderIdx = snap.draftOrder.indexOf(pendingRid);
+              if (orderIdx >= 0) snap.draftOrder[orderIdx] = realRid;
             }
           }
         }
