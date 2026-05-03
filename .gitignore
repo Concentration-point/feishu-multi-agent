@@ -37,6 +37,7 @@ node_modules/
 runs/
 checkpoints/
 knowledge/.sync_state.json
+.chroma/
 
 # 分批提交计划（开发期脚手架，不入历史）
 COMMIT_PLAN.md
