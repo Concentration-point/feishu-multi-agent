@@ -29,6 +29,16 @@ EXPERIENCE_CONFIDENCE_THRESHOLD: float = float(os.getenv("EXPERIENCE_CONFIDENCE_
 EXPERIENCE_MAX_PER_CATEGORY: int = int(os.getenv("EXPERIENCE_MAX_PER_CATEGORY", "3"))
 EXPERIENCE_TOP_K: int = int(os.getenv("EXPERIENCE_TOP_K", "5"))
 
+# 只有白名单内角色的经验才进入 L2 经验池（Bitable + Chroma）。
+# copywriter 自评无外部验证；project_manager 产出为 LLM 通识，均不入池。
+# 白名单角色的 _hook_reflect 和 _self_write_wiki 仍正常执行，只是不写到 L2。
+EXPERIENCE_POOL_ROLE_ALLOWLIST: frozenset[str] = frozenset(
+    s.strip() for s in os.getenv(
+        "EXPERIENCE_POOL_ROLE_ALLOWLIST",
+        "account_manager,strategist,reviewer",
+    ).split(",") if s.strip()
+)
+
 # ── 审核流转策略 ──
 REVIEW_PASS_THRESHOLD_DEFAULT: float = float(os.getenv("REVIEW_PASS_THRESHOLD_DEFAULT", "0.6"))
 REVIEW_MAX_RETRIES: int = int(os.getenv("REVIEW_MAX_RETRIES", "2"))

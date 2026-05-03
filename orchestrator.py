@@ -10,6 +10,7 @@ from agents.base import BaseAgent
 from config import (
     DELIVERY_DOC_ENABLED,
     EXPERIENCE_CONFIDENCE_THRESHOLD,
+    EXPERIENCE_POOL_ROLE_ALLOWLIST,
     FEISHU_CHAT_ID,
     HUMAN_REVIEW_TIMEOUT,
     LLM_API_KEY,
@@ -1715,6 +1716,15 @@ class Orchestrator:
             card = item["card"]
             agent_ref: BaseAgent | None = item.get("agent")
 
+            # 角色白名单过滤：只有外部验证来源的角色经验才进入 L2 经验池。
+            # copywriter 自评无外部验证；project_manager 为 LLM 通识；均只留 wiki 本地记录。
+            if role_id not in EXPERIENCE_POOL_ROLE_ALLOWLIST:
+                logger.info(
+                    "[经验沉淀] 跳过 %s，该角色不在 L2 经验池白名单 %s",
+                    role_id, sorted(EXPERIENCE_POOL_ROLE_ALLOWLIST),
+                )
+                continue
+
             stage_ok = any(result.ok and result.role_id == role_id for result in self.stage_results)
 
             knowledge_cited = False
@@ -1732,15 +1742,7 @@ class Orchestrator:
                     if knowledge_cited:
                         break
 
-            no_rework = role_id != "copywriter" or self.reviewer_retries == 0
-
-            # 前置门禁：被驳回返工过的经验不进入打分流程
-            if not no_rework:
-                logger.info(
-                    "[经验沉淀] 跳过 %s，该经验来自已返工的 copywriter（reviewer_retries=%d），不进入打分流程",
-                    role_id, self.reviewer_retries,
-                )
-                continue
+            no_rework = True  # 白名单内角色均不存在返工惩罚场景
 
             confidence = self._calc_confidence(
                 pass_rate=pass_rate,

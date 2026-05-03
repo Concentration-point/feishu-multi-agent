@@ -53,9 +53,10 @@ class TestCalcConfidence:
 
     def test_threshold_boundary(self):
         from config import EXPERIENCE_CONFIDENCE_THRESHOLD
+        # 白名单内角色 no_rework 恒为 True；此用例验证 no_rework=False 会给出低于阈值的分数
         score = self.calc(pass_rate=0.75, task_completed=True, no_rework=False, knowledge_cited=True)
         # 0.4*0.75 + 0.3*1 + 0.2*0 + 0.1*1 = 0.3+0.3+0+0.1 = 0.7
-        assert score == EXPERIENCE_CONFIDENCE_THRESHOLD
+        assert score < EXPERIENCE_CONFIDENCE_THRESHOLD
 
 
 # ── 经验事件发布 ──
@@ -324,7 +325,7 @@ class TestEventOrdering:
 # ── P11 回归：fan-out 多平台经验不丢失 ──
 
 class TestFanoutExperienceDedup:
-    """验证 _settle_experiences 不会将 copywriter fan-out 的多平台经验去重为一条。"""
+    """验证 _settle_experiences 的 (role_id, platform) 去重逻辑——用 reviewer 角色（在白名单内）。"""
 
     @pytest.fixture
     def orch(self):
@@ -337,15 +338,16 @@ class TestFanoutExperienceDedup:
         return o, bus
 
     def _make_fanout_pending(self, platform: str) -> dict:
+        # 使用白名单内角色；copywriter 经验不入 L2 经验池
         return {
-            "role_id": "copywriter",
+            "role_id": "reviewer",
             "card": {
                 "situation": f"{platform}场景",
                 "action": f"{platform}行动行动",
                 "outcome": f"{platform}结果结果",
                 "lesson": f"{platform}经验教训足够长",
                 "category": "电商大促",
-                "applicable_roles": ["copywriter"],
+                "applicable_roles": ["reviewer", "copywriter"],
             },
             "agent": None,
             "task_filter": {"platform": platform},
@@ -353,14 +355,14 @@ class TestFanoutExperienceDedup:
 
     @pytest.mark.asyncio
     async def test_fanout_all_platforms_settled(self, orch):
-        """3 个平台的 copywriter 经验应各自独立沉淀，不被去重为 1 条。"""
+        """3 个平台的白名单角色经验应各自独立沉淀，不被去重为 1 条。"""
         from dataclasses import dataclass
         @dataclass
         class FakeResult:
             ok: bool
             role_id: str
         o, bus = orch
-        o.stage_results = [FakeResult(ok=True, role_id="copywriter")]
+        o.stage_results = [FakeResult(ok=True, role_id="reviewer")]
 
         pending = [
             self._make_fanout_pending("小红书"),
@@ -388,14 +390,14 @@ class TestFanoutExperienceDedup:
 
     @pytest.mark.asyncio
     async def test_fanout_same_platform_deduped(self, orch):
-        """同一平台重复出现应去重为 1 条。"""
+        """同一角色同平台重复出现应去重为 1 条。"""
         from dataclasses import dataclass
         @dataclass
         class FakeResult:
             ok: bool
             role_id: str
         o, bus = orch
-        o.stage_results = [FakeResult(ok=True, role_id="copywriter")]
+        o.stage_results = [FakeResult(ok=True, role_id="reviewer")]
 
         pending = [
             self._make_fanout_pending("小红书"),

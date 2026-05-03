@@ -29,6 +29,7 @@ from config import (
     LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, LLM_MAX_RETRIES, LLM_APP_MAX_RETRIES,
     LLM_TIMEOUT_SECONDS, EXPERIENCE_TOP_K,
     L0_MESSAGE_WINDOW_MAX_TOKENS, L0_MESSAGE_WINDOW_RESERVE_TOKENS,
+    EXPERIENCE_POOL_ROLE_ALLOWLIST,
 )
 from memory.project import ProjectMemory
 from memory.experience import ExperienceManager
@@ -1100,6 +1101,10 @@ class BaseAgent:
         self._messages = messages
 
         # 8. Hook: 自省蒸馏 + 自主写入 wiki（不影响主流程）
+        # 只有白名单角色才执行蒸馏；copywriter / project_manager 无外部验证来源，跳过
+        if self.role_id not in EXPERIENCE_POOL_ROLE_ALLOWLIST:
+            logger.info("[%s] 跳过 Hook 蒸馏（角色不在白名单）", self.soul.name)
+            return final_output
         try:
             experience_card = await self._hook_reflect(messages)
             if experience_card:
