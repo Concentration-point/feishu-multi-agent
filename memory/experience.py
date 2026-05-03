@@ -32,10 +32,12 @@ from config import (
     EXPERIENCE_CONFIDENCE_THRESHOLD,
     EXPERIENCE_MAX_PER_CATEGORY,
     EXPERIENCE_TOP_K,
+    EXPERIENCE_SIMILARITY_DEDUP_THRESHOLD,
     safe_float as _safe_float,
     safe_int as _safe_int,
 )
 from feishu.bitable import BitableClient
+from memory.experience_store import ExperienceVectorStore
 from tools.write_wiki import (
     sanitize_name,
     mark_dirty,
@@ -50,6 +52,9 @@ logger = logging.getLogger(__name__)
 DEDUP_SIMILARITY_THRESHOLD = 0.85
 MERGED_LESSON_COMPRESS_TRIGGER = 200
 MERGED_LESSON_MAX_LEN = 100
+
+# 可操作词正则：命中其一即视为有具体行动指导
+_ACTIONABLE_PATTERN = re.compile(r'先|必须|避免|不要|当.{0,10}时|应该|禁止|建议')
 
 
 def _normalize_text(value: Any) -> str:
@@ -80,6 +85,33 @@ def _is_card_quality_ok(card: dict) -> tuple[bool, str]:
         return False, "situation too short"
     if len(outcome) < 4:
         return False, "outcome too short"
+    return True, "ok"
+
+
+def _is_lesson_quality_ok(card: dict) -> tuple[bool, str]:
+    """三规则质量检查，三条全过才入库。
+
+    1. lesson 字数 >= 20
+    2. lesson 包含至少一个可操作词
+    3. lesson 与 situation 文本 Jaccard 重叠率 < 60%
+    """
+    lesson = _normalize_text(card.get("lesson", ""))
+    situation = _normalize_text(card.get("situation", ""))
+
+    if len(lesson) < 20:
+        return False, f"lesson 字数不足 ({len(lesson)} < 20)"
+
+    if not _ACTIONABLE_PATTERN.search(lesson):
+        return False, "lesson 缺少可操作词（先/必须/避免/不要/当…时/应该/禁止/建议）"
+
+    lesson_tokens = _tokenize_lesson(lesson)
+    situation_tokens = _tokenize_lesson(situation)
+    if lesson_tokens and situation_tokens:
+        union = lesson_tokens | situation_tokens
+        overlap = len(lesson_tokens & situation_tokens) / len(union)
+        if overlap >= 0.6:
+            return False, f"lesson 与 situation 重叠率过高 ({overlap:.0%} >= 60%)"
+
     return True, "ok"
 
 
@@ -185,53 +217,118 @@ class ExperienceManager:
     async def save_experience(
         self, card: dict, confidence: float, project_name: str
     ) -> str | None:
-        """将经验卡片写入 Bitable 经验池表，返回 record_id。"""
+        """将经验卡片双写到 Bitable 经验池表和 Chroma 向量库，返回 record_id。
+
+        两个写入独立：任一失败只打 warning，不影响另一个。
+        """
         ok, reason = _is_card_quality_ok(card)
         if not ok:
             logger.info("经验卡片质量不足，跳过写入: %s", reason)
             return None
 
-        if not self._table_configured:
-            logger.info("经验池表未配置，跳过 Bitable 写入")
+        ok2, reason2 = _is_lesson_quality_ok(card)
+        if not ok2:
+            logger.warning("经验 lesson 质量检查不通过，跳过写入: %s", reason2)
             return None
 
-        # 按 applicable_roles 扇出写入：每个角色各写一条 Bitable 记录
-        # 这样 reviewer 沉淀的经验也能被 copywriter 的 query_top_k 查到
+        # 按 applicable_roles 扇出写入：每个角色各写一条记录
         roles = card.get("applicable_roles", [])
         if not roles:
             roles = [card.get("role_id", "unknown")]
         category = card.get("category", "未分类")
+        lesson = _normalize_text(card.get("lesson", ""))
 
         saol_content = json.dumps({
             "situation": card.get("situation", ""),
             "action": card.get("action", ""),
             "outcome": card.get("outcome", ""),
-            "lesson": card.get("lesson", ""),
+            "lesson": lesson,
             "title": card.get("title", ""),
             "source_run": card.get("source_run", ""),
             "source_stage": card.get("source_stage", ""),
             "review_status": card.get("review_status", ""),
         }, ensure_ascii=False, indent=2)
 
+        created_at = datetime.now(timezone.utc).isoformat()
+        store = ExperienceVectorStore()
+
         record_ids: list[str] = []
         for role in roles:
-            fields = {
-                FE["role"]: role,
-                FE["scene"]: category,
-                FE["content"]: saol_content,
-                FE["confidence"]: confidence,
-                FE["use_count"]: 0,
-                FE["source_project"]: project_name,
+            # ── 语义去重：写入前查 Chroma 最近邻 ──
+            try:
+                existing = store.query(lesson or saol_content, role_id=role, k=1)
+                if existing:
+                    top = existing[0]
+                    similarity = 1.0 - float(top["distance"])
+                    if similarity > EXPERIENCE_SIMILARITY_DEDUP_THRESHOLD:
+                        existing_conf = _safe_float(top["metadata"].get("confidence", 0))
+                        if existing_conf >= confidence:
+                            logger.warning(
+                                "语义去重: 跳过入库 role=%s similarity=%.3f "
+                                "existing_conf=%.2f >= new_conf=%.2f",
+                                role, similarity, existing_conf, confidence,
+                            )
+                            continue
+                        else:
+                            # 新经验置信度更高 → 替换旧的
+                            old_id = top["id"]
+                            logger.info(
+                                "语义去重: 新经验置信度更高，替换旧经验 role=%s old_id=%s "
+                                "old_conf=%.2f -> new_conf=%.2f",
+                                role, old_id, existing_conf, confidence,
+                            )
+                            store.delete(old_id)
+                            # Bitable 同步删旧（fallback id 以 chroma- 开头，无 Bitable 记录）
+                            if self._table_configured and not old_id.startswith("chroma-"):
+                                try:
+                                    await self._client.delete_record(self._table_id, old_id)
+                                except Exception as del_err:
+                                    logger.warning("去重删除 Bitable 旧记录失败: %s", del_err)
+            except Exception as dedup_err:
+                logger.warning("语义去重检查失败，跳过去重直接入库: role=%s err=%s", role, dedup_err)
+
+            # ── Bitable 写入 ──
+            record_id: str | None = None
+            if self._table_configured:
+                fields = {
+                    FE["role"]: role,
+                    FE["scene"]: category,
+                    FE["content"]: saol_content,
+                    FE["confidence"]: confidence,
+                    FE["use_count"]: 0,
+                    FE["source_project"]: project_name,
+                }
+                try:
+                    record_id = await self._client.create_record(self._table_id, fields)
+                    logger.info("经验写入 Bitable: role=%s cat=%s conf=%.2f",
+                                role, category, confidence)
+                    record_ids.append(record_id)
+                except Exception as e:
+                    logger.warning("经验写入 Bitable 失败: role=%s err=%s", role, e)
+            else:
+                logger.info("经验池表未配置，跳过 Bitable 写入: role=%s", role)
+
+            # ── Chroma 写入（独立，Bitable 失败不影响）──
+            chroma_id = record_id or (
+                "chroma-" + hashlib.md5(
+                    f"{role}::{category}::{lesson}".encode("utf-8")
+                ).hexdigest()[:16]
+            )
+            chroma_meta = {
+                "role_id": role,
+                "category": category,
+                "confidence": confidence,
+                "use_count": 0,
+                "source_project": project_name,
+                "created_at": created_at,
             }
             try:
-                record_id = await self._client.create_record(self._table_id, fields)
-                logger.info("经验写入 Bitable: role=%s cat=%s conf=%.2f",
-                            role, category, confidence)
-                record_ids.append(record_id)
+                store.add(chroma_id, lesson or saol_content, chroma_meta)
+                logger.info("经验写入 Chroma: id=%s role=%s conf=%.2f",
+                            chroma_id, role, confidence)
             except Exception as e:
-                logger.warning("经验写入 Bitable 失败: role=%s err=%s", role, e)
+                logger.warning("经验写入 Chroma 失败: role=%s err=%s", role, e)
 
-        # 保持返回类型签名 str | None，返回第一条 record_id
         return record_ids[0] if record_ids else None
 
     async def save_to_wiki(self, card: dict, confidence: float = 0.0) -> str | None:
@@ -297,78 +394,64 @@ class ExperienceManager:
     # ── 查询 ──
 
     async def query_top_k(
-        self, role_id: str, category: str | None = None, k: int | None = None
+        self, role_id: str, task_brief: str = "", k: int | None = None
     ) -> list[dict]:
-        """查询 top-K 经验卡片。
+        """语义检索 top-K 经验卡片。
 
-        - 过滤 confidence >= 阈值
-        - 按 confidence × (1 + log(use_count+1)) 降序
-        - 命中的经验使用次数 +1
+        用 task_brief 做 Chroma 语义检索，where 只过滤 role_id，
+        候选集内按 confidence 降序取 top-K，命中记录的 use_count +1。
         """
-        if not self._table_configured:
-            return []
-
         k = k or EXPERIENCE_TOP_K
 
-        filter_parts = [f'CurrentValue.[{FE["role"]}]="{role_id}"']
-        if category:
-            filter_parts.append(f'CurrentValue.[{FE["scene"]}]="{category}"')
+        # 从 Chroma 语义检索候选（过量拉取再按 confidence 筛选）
+        store = ExperienceVectorStore()
+        candidates = store.query(task_brief or role_id, role_id=role_id, k=k * 3)
 
-        filter_expr = (
-            f'AND({",".join(filter_parts)})' if len(filter_parts) > 1
-            else filter_parts[0]
+        # 过滤置信度不足的记录
+        filtered = [
+            c for c in candidates
+            if _safe_float(c["metadata"].get("confidence", 0)) >= EXPERIENCE_CONFIDENCE_THRESHOLD
+        ]
+
+        # 按 confidence 降序取 top-K
+        filtered.sort(
+            key=lambda c: _safe_float(c["metadata"].get("confidence", 0)),
+            reverse=True,
         )
-
-        try:
-            records = await self._client.list_records(self._table_id, filter_expr)
-        except Exception as e:
-            logger.warning("查询经验池失败: %s", e)
-            return []
-
-        # 过滤置信度 >= 阈值（同时排除已合并的废弃记录）
-        filtered = []
-        for r in records:
-            conf = _safe_float(r["fields"].get(FE["confidence"], 0))
-            if conf >= EXPERIENCE_CONFIDENCE_THRESHOLD:
-                r["_confidence"] = conf
-                r["_use_count"] = _safe_int(r["fields"].get(FE["use_count"], 0))
-                filtered.append(r)
-
-        # 排序
-        for r in filtered:
-            r["_score"] = r["_confidence"] * (1 + math.log(r["_use_count"] + 1))
-        filtered.sort(key=lambda x: x["_score"], reverse=True)
-
         top_k = filtered[:k]
 
-        # 更新使用次数 +1
-        for r in top_k:
-            try:
-                await self._client.update_record(
-                    self._table_id, r["record_id"],
-                    {FE["use_count"]: r["_use_count"] + 1},
-                )
-            except Exception:
-                pass
+        # 更新 Bitable use_count +1（不阻塞，失败静默）
+        if self._table_configured:
+            for item in top_k:
+                record_id = item["id"]
+                use_count = _safe_int(item["metadata"].get("use_count", 0))
+                try:
+                    await self._client.update_record(
+                        self._table_id, record_id,
+                        {FE["use_count"]: use_count + 1},
+                    )
+                except Exception:
+                    pass
 
         # 解析返回
         results = []
-        for r in top_k:
-            content_raw = r["fields"].get(FE["content"], "")
+        for item in top_k:
+            meta = item["metadata"]
+            content_raw = item["document"]
             try:
                 saol = json.loads(content_raw)
             except (json.JSONDecodeError, TypeError):
                 saol = {"lesson": content_raw}
             results.append({
-                "record_id": r["record_id"],
-                "role": r["fields"].get(FE["role"], ""),
-                "category": r["fields"].get(FE["scene"], ""),
-                "confidence": r["_confidence"],
-                "use_count": r["_use_count"],
+                "record_id": item["id"],
+                "role": meta.get("role_id", ""),
+                "category": meta.get("category", ""),
+                "confidence": _safe_float(meta.get("confidence", 0)),
+                "use_count": _safe_int(meta.get("use_count", 0)),
                 **saol,
             })
 
-        logger.info("query_top_k role=%s cat=%s found=%d", role_id, category, len(results))
+        logger.info("query_top_k role=%s brief_len=%d found=%d", role_id, len(task_brief), len(results))
         return results
 
     # ── 去重合并 ──

@@ -25,7 +25,7 @@ CONTENT_TABLE_ID: str = os.getenv("CONTENT_TABLE_ID", "")
 EXPERIENCE_TABLE_ID: str = os.getenv("EXPERIENCE_TABLE_ID", "")
 PROMOTION_REVIEW_TABLE_ID: str = os.getenv("PROMOTION_REVIEW_TABLE_ID", "")
 
-EXPERIENCE_CONFIDENCE_THRESHOLD: float = float(os.getenv("EXPERIENCE_CONFIDENCE_THRESHOLD", "0.7"))
+EXPERIENCE_CONFIDENCE_THRESHOLD: float = float(os.getenv("EXPERIENCE_CONFIDENCE_THRESHOLD", "0.75"))
 EXPERIENCE_MAX_PER_CATEGORY: int = int(os.getenv("EXPERIENCE_MAX_PER_CATEGORY", "3"))
 EXPERIENCE_TOP_K: int = int(os.getenv("EXPERIENCE_TOP_K", "5"))
 
@@ -66,6 +66,12 @@ ASK_HUMAN_TIMEOUT: int = int(os.getenv("ASK_HUMAN_TIMEOUT", "120"))
 # ── 知识库配置 ──
 KNOWLEDGE_BASE_PATH: str = os.getenv("KNOWLEDGE_BASE_PATH", "knowledge")
 
+# ── Chroma 向量数据库 ──
+CHROMA_DB_PATH: str = os.getenv("CHROMA_DB_PATH", ".chroma")
+EXPERIENCE_SIMILARITY_DEDUP_THRESHOLD: float = float(
+    os.getenv("EXPERIENCE_SIMILARITY_DEDUP_THRESHOLD", "0.85")
+)
+
 # 上行同步（本地 → 飞书）间隔，默认 1 小时
 SYNC_INTERVAL: int = int(os.getenv("SYNC_INTERVAL", "3600"))
 
@@ -99,11 +105,16 @@ L0_MESSAGE_WINDOW_RESERVE_TOKENS: int = int(os.getenv("L0_MESSAGE_WINDOW_RESERVE
 TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
 if not TAVILY_API_KEY:
     logging.getLogger(__name__).warning(
-        "TAVILY_API_KEY 未配置，search_web 工具将不可用（策略师无法搜索公网信息）"
+        "TAVILY_API_KEY 未配置，search_web 工具英文搜索将不可用（策略师无法搜索英文公网信息）"
     )
 TAVILY_API_URL: str = os.getenv("TAVILY_API_URL", "https://api.tavily.com/search")
 TAVILY_DEFAULT_MAX_RESULTS: int = int(os.getenv("TAVILY_DEFAULT_MAX_RESULTS", "5"))
 TAVILY_TIMEOUT_SECONDS: float = float(os.getenv("TAVILY_TIMEOUT_SECONDS", "15"))
+
+# ── 秘塔 AI 搜索（中文搜索引擎，覆盖小红书/美团/大众点评等中文站）──
+METASO_API_KEY: str = os.getenv("METASO_API_KEY", "")
+# 官方接口：https://metaso.cn/api/v1/search（注意不是 api.metaso.cn）
+METASO_API_BASE: str = os.getenv("METASO_API_BASE", "https://metaso.cn/api/v1")
 
 WEB_FETCH_MAX_CHARS_DEFAULT: int = int(os.getenv("WEB_FETCH_MAX_CHARS_DEFAULT", "10000"))
 WEB_FETCH_MAX_CHARS_LIMIT: int = int(os.getenv("WEB_FETCH_MAX_CHARS_LIMIT", "50000"))
@@ -133,7 +144,6 @@ FIELD_MAP_PROJECT = {
     "review_status": "人审状态",
     "pending_meta": "人审元数据",
     "human_feedback": "人类修改意见",
-    "agent_error_log": "Agent异常日志",  # 记录 Agent 执行失败信息，便于运营侧感知
 }
 
 # ── 内容排期表字段映射 ──

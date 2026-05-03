@@ -136,10 +136,13 @@ _ROLE_REFLECT_PROMPTS: dict[str, str] = {
 # ── 角色必调工具（代码级硬约束，prompt 偏航时兜底）──
 # 如果 ReAct 结束后这些工具未被调用，post-validation 会注入指令要求 LLM 补全
 _REQUIRED_TOOL_CALLS: dict[str, list[str]] = {
-    # account_manager 的人审已改由 Orchestrator 门禁驱动，不再依赖 Agent 自调工具
+    # account_manager 必须产出 Brief 解读报告并写回主表；
+    # post-validation 兜底确保即使 ReAct 提前退出也会补全写入
+    "account_manager": ["write_project"],
     # 文案走「对标 + 规则」双轨：search_reference 拿爆款套路，
-    # search_knowledge 查禁用词/平台规范，二者缺一不可
-    "copywriter": ["search_reference", "search_knowledge"],
+    # search_knowledge 查禁用词/平台规范，二者缺一不可；
+    # write_content 是成稿写回的唯一出口，缺失则本轮无任何内容落地
+    "copywriter": ["search_reference", "search_knowledge", "write_content"],
     # reviewer 必须用 submit_review 写回审核结论（结构化五维校验），
     # 同时必须调 search_knowledge 驱动语义层规则检索
     "reviewer": ["search_knowledge", "submit_review"],
@@ -151,6 +154,9 @@ _POST_VALIDATION_MINI_ITERS = 3
 
 # 空 turn 检测：LLM 产出无 tool_use 且无 text 时，最多重试注入此轮次
 _MAX_EMPTY_TURN_RETRIES = 2
+
+# 计划性语言信号：LLM 输出文字宣告"将要"做某事但无工具调用，触发强制重试
+_PLAN_SIGNALS: tuple[str, ...] = ("马上", "下一步", "接下来我", "我将", "即将")
 
 
 @dataclass
@@ -456,6 +462,30 @@ def load_formal_experiences(category: str | None = None) -> str:
         except Exception:
             continue
     return "\n\n---\n\n".join(parts)
+
+
+def _summarize_tool_result(tool_name: str, result: str | None) -> str:
+    """为事件日志生成工具结果摘要，确保 URL 等关键字段可见。"""
+    if not result:
+        return ""
+    try:
+        data = json.loads(result)
+    except Exception:
+        return result[:500]
+
+    if tool_name == "search_web":
+        lines = []
+        answer = (data.get("answer") or "").strip()
+        if answer:
+            lines.append(f"answer: {answer[:200]}")
+        for item in (data.get("results") or []):
+            url = item.get("url", "")
+            title = item.get("title", "")[:60]
+            snippet = (item.get("snippet") or "")[:80]
+            lines.append(f"  - [{title}] {url}  {snippet}")
+        return "\n".join(lines)[:2000]
+
+    return result[:500]
 
 
 class BaseAgent:
@@ -769,7 +799,7 @@ class BaseAgent:
         )
 
         # 2. 加载历史经验
-        experience_text = await self._load_experiences(proj.project_type)
+        experience_text = await self._load_experiences(proj)
 
         # 3. 装配 system prompt
         system_prompt = self._build_system_prompt(proj, experience_text)
@@ -910,7 +940,7 @@ class BaseAgent:
 
                     self._publish("tool.returned", {
                         "tool_name": fn_name,
-                        "result": result[:300] if result else "",
+                        "result": _summarize_tool_result(fn_name, result),
                     }, round_num=iteration)
 
                     window.append({
@@ -952,6 +982,24 @@ class BaseAgent:
                         f"{self._empty_turn_count}/{_MAX_EMPTY_TURN_RETRIES}]"
                     )
                     break
+
+                # 计划性语言检测：说了"将要做 X"但没调工具 → 强制重试，防"想了但没做"
+                _plan_hit = any(s in content for s in _PLAN_SIGNALS)
+                if _plan_hit and iteration < self.soul.max_iterations - 1:
+                    hit = next(s for s in _PLAN_SIGNALS if s in content)
+                    logger.warning(
+                        "[%s] 第%d轮 → 计划性语言「%s」命中，无工具调用，注入重试",
+                        self.soul.name, iteration, hit,
+                    )
+                    self._publish("agent.thinking", {"content": content[:500]}, round_num=iteration)
+                    window.append({
+                        "role": "user",
+                        "content": (
+                            f"[系统拦截] 你说了「{hit}」但没有调用任何工具。"
+                            "思考中的计划不是执行——请立即调用对应工具，不要再描述意图。"
+                        ),
+                    })
+                    continue
 
                 # 有文本 → 正常最终输出
                 final_output = content
@@ -1200,31 +1248,39 @@ class BaseAgent:
             if rid not in reviewed
         ]
 
-    async def _load_experiences(self, project_type: str) -> str:
+    async def _load_experiences(self, proj) -> str:
         """从两源加载历史经验拼为 prompt 段落：
-        - L1a：Bitable 经验池 top-K（排序 + 使用次数累计）
+        - L1a：Chroma 语义检索 top-K（用 brief + brand_tone + project_type 做语义查询）
         - L1b：knowledge/10_经验沉淀/{category}/ 正式区全文（升格后的高质经验）
         - 11_待整理收件箱/ 的脏经验**不**进 prompt，避免污染
         """
+        project_type: str = getattr(proj, "project_type", "") or ""
+        brief: str = getattr(proj, "brief", "") or ""
+        brand_tone: str = getattr(proj, "brand_tone", "") or ""
+        task_brief = " ".join(filter(None, [brief, brand_tone, project_type])).strip()
+
         lines: list[str] = []
         bitable_count = 0
 
-        # L1a：Bitable top-K
+        # L1a：Chroma 语义检索 top-K
         try:
             em = ExperienceManager()
             experiences = await em.query_top_k(
-                self.role_id, category=project_type, k=EXPERIENCE_TOP_K
+                self.role_id, task_brief=task_brief, k=EXPERIENCE_TOP_K
             )
             if experiences:
                 bitable_count = len(experiences)
-                lines.append("## 过往高分经验（基于 Bitable 经验池 top-K）")
+                lines.append("## 过往高分经验（基于 Chroma 语义检索 top-K）")
                 lines.append("以下是你在类似场景中积累的经验，请参考但不要机械照搬：")
                 for i, exp in enumerate(experiences, 1):
                     cat = exp.get("category", "")
                     lesson = exp.get("lesson", "")
                     lines.append(f"{i}. [{cat}] {lesson}")
+            else:
+                lines.append("暂无相关历史经验")
         except Exception as e:
-            logger.warning("[%s] 加载 Bitable 经验失败: %s", self.soul.name, e)
+            logger.warning("[%s] 加载 Chroma 经验失败: %s", self.soul.name, e)
+            lines.append("暂无相关历史经验")
 
         # L1b：10_经验沉淀/ 正式经验全文
         formal_loaded = False
@@ -1240,13 +1296,12 @@ class BaseAgent:
             logger.warning("[%s] 加载正式经验失败: %s", self.soul.name, e)
 
         # 发布经验加载事件供 Dashboard 可视化
-        if lines:
-            self._publish("experience.loaded", {
-                "role_id": self.role_id,
-                "bitable_count": bitable_count,
-                "formal_loaded": formal_loaded,
-                "category": project_type or "未分类",
-            })
+        self._publish("experience.loaded", {
+            "role_id": self.role_id,
+            "bitable_count": bitable_count,
+            "formal_loaded": formal_loaded,
+            "category": project_type or "未分类",
+        })
 
         return "\n".join(lines)
 

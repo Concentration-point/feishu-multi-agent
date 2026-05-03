@@ -922,6 +922,7 @@ class Orchestrator:
 
         if pass_rate >= self._review_threshold and not has_red_flag:
             print(f"[Orchestrator] 审核通过率 {pass_rate:.0%}，达到阈值 {self._review_threshold:.0%}，且无红线风险，推进状态「审核中」→「排期中」")
+            await self._write_auto_review_summary(pass_rate)
             try:
                 await self._pm.update_status("排期中")
             except Exception as exc:
@@ -934,6 +935,7 @@ class Orchestrator:
                 f"[Orchestrator] 警告: 审核通过率 {pass_rate:.0%}，阈值 {self._review_threshold:.0%}，"
                 f"重试已达上限 {REVIEW_MAX_RETRIES}，强制推进到排期阶段"
             )
+            await self._write_auto_review_summary(pass_rate)
             try:
                 await self._pm.update_status("排期中")
             except Exception as exc:
@@ -969,6 +971,50 @@ class Orchestrator:
             await self._pm.update_status("撰写中")
         except Exception as exc:
             print(f"[Orchestrator] 警告: 状态回退失败: {type(exc).__name__}: {exc}")
+
+    async def _write_auto_review_summary(self, pass_rate: float) -> None:
+        """审核完成后，由 Orchestrator 自动聚合行级审核结果写入 review_summary。
+
+        不依赖 LLM 主动调工具，确保 _validate_handoff 的前置字段非空。
+        若 review_summary 已有值（reviewer 手写过）则跳过，不覆盖。
+        """
+        try:
+            proj = await self._pm.load()
+            if (proj.review_summary or "").strip():
+                return  # reviewer 已写，不覆盖
+
+            project_name = proj.client_name or "未知客户"
+            rows = await ContentMemory().list_by_project(project_name)
+
+            passed = [r for r in rows if (r.review_status or "").strip() == REVIEW_STATUS_APPROVED]
+            failed = [r for r in rows if (r.review_status or "").strip() not in (REVIEW_STATUS_APPROVED, "")]
+            total = len(rows)
+
+            lines = [
+                f"审核通过率：{pass_rate:.0%}（{len(passed)}/{total} 条通过）",
+                f"阈值：{self._review_threshold:.0%}",
+            ]
+            if failed:
+                lines.append("未通过条目：")
+                for r in failed[:5]:  # 最多列 5 条，避免摘要过长
+                    fb = (r.review_feedback or "").strip()[:60]
+                    lines.append(f"  · [{r.review_status}] {r.title or r.record_id[:8]}：{fb}")
+                if len(failed) > 5:
+                    lines.append(f"  · … 另 {len(failed) - 5} 条，详见内容排期表")
+            else:
+                lines.append("全部内容行已通过审核。")
+
+            summary = "\n".join(lines)
+            await self._pm.write_review_summary(
+                summary,
+                pass_rate,
+                threshold=float(getattr(proj, "review_threshold", 0.0) or 0.0),
+                red_flag=getattr(proj, "review_red_flag", "") or "",
+            )
+            print(f"[Orchestrator] 已自动写入 review_summary（{len(summary)} 字）")
+        except Exception as exc:
+            logger.warning("自动写入 review_summary 失败，跳过: %s", exc)
+            print(f"[Orchestrator] 警告: 自动写入 review_summary 失败: {type(exc).__name__}: {exc}")
 
     async def _enter_human_review_gate(self, *, resumed: bool) -> str:
         """AM 之后的人审门禁，或从"待人审"恢复。
@@ -1218,6 +1264,14 @@ class Orchestrator:
                         f"[Orchestrator] 补写成功 rid={row.record_id[:12]}... "
                         f"title={row.title[:20]}... 字数={len(draft)}"
                     )
+                    # 补发 Dashboard 事件，保证前端与兜底路径同步
+                    self._publish("content.updated", {
+                        "record_id": row.record_id,
+                        "platform": getattr(row, "platform", ""),
+                        "title": getattr(row, "title", ""),
+                        "content_length": len(draft),
+                        "via": "fallback",
+                    }, agent_role="copywriter", agent_name="文案")
                 except Exception as exc:
                     logger.exception("补写 write_draft 失败 rid=%s: %s", row.record_id[:12], exc)
             else:
@@ -1679,6 +1733,15 @@ class Orchestrator:
                         break
 
             no_rework = role_id != "copywriter" or self.reviewer_retries == 0
+
+            # 前置门禁：被驳回返工过的经验不进入打分流程
+            if not no_rework:
+                logger.info(
+                    "[经验沉淀] 跳过 %s，该经验来自已返工的 copywriter（reviewer_retries=%d），不进入打分流程",
+                    role_id, self.reviewer_retries,
+                )
+                continue
+
             confidence = self._calc_confidence(
                 pass_rate=pass_rate,
                 task_completed=stage_ok,
