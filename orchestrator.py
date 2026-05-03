@@ -1774,10 +1774,37 @@ class Orchestrator:
             except Exception as exc:
                 logger.warning("[经验沉淀] %s 沉淀失败: %s", role_id, exc)
 
-        print(
-            f"[Orchestrator] 经验沉淀完成:\n"
-            f"  蒸馏 {total} 条 -> 打分通过 {passed} 条 -> 合并 {merged_count} 组 -> 最终沉淀 {settled} 条"
-        )
+        # ── 经验进化统计输出 ──
+        print("\n" + "-" * 60)
+        print("  经验进化统计（自进化闭环）")
+        print("-" * 60)
+        print(f"  Hook 蒸馏产出:   {total} 条")
+        print(f"  置信度阈值:     ≥ {EXPERIENCE_CONFIDENCE_THRESHOLD:.2f}")
+        print(f"  打分通过:       {passed} 条")
+        print(f"  去重合并:       {merged_count} 组")
+        print(f"  最终沉淀:       {settled} 条（Bitable + Wiki 双写）")
+
+        # 按角色统计沉淀来源
+        role_stats: dict[str, int] = {}
+        for item in unique_pending:
+            rid = item["role_id"]
+            role_stats[rid] = role_stats.get(rid, 0) + 1
+        if role_stats:
+            roles_line = " | ".join(f"{r}: {c}" for r, c in role_stats.items())
+            print(f"  来源角色分布:   {roles_line}")
+
+        # 展示沉淀样例（最多 2 条）
+        sample_count = 0
+        for item in unique_pending:
+            card = item.get("card") or {}
+            lesson = str(card.get("lesson", "") or "")[:60]
+            if lesson and sample_count < 2:
+                cat = card.get("category", "未分类")
+                print(f"  样例 [{item['role_id']}][{cat}]: {lesson}...")
+                sample_count += 1
+
+        print("-" * 60)
+
         self._publish("experience.settle_completed", {
             "total_distilled": total,
             "passed_scoring": passed,
