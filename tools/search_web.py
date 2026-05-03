@@ -1,4 +1,9 @@
-"""Tool: search the public web through Tavily for agent discovery."""
+"""Tool: search the public web via dual-engine routing.
+
+中文查询 → 秘塔 AI 搜索（覆盖小红书/美团/大众点评等中文站）
+英文查询 → Tavily（国际内容）
+Agent 无感知切换，SCHEMA 不变。
+"""
 
 from __future__ import annotations
 
@@ -9,6 +14,8 @@ import re
 import httpx
 
 from config import (
+    METASO_API_BASE,
+    METASO_API_KEY,
     TAVILY_API_KEY,
     TAVILY_API_URL,
     TAVILY_DEFAULT_MAX_RESULTS,
@@ -20,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 _SITE_OPERATOR_RE = re.compile(r"(?i)(?:^|\s)site:\S+")
 _SPACE_RE = re.compile(r"\s+")
+_CHINESE_RE = re.compile(r"[一-鿿]")
+
+
+def _contains_chinese(text: str) -> bool:
+    return bool(_CHINESE_RE.search(text))
 
 
 SCHEMA = {
@@ -52,12 +64,12 @@ SCHEMA = {
             "search_web, call web_fetch with one returned URL and a focused prompt for deep reading.\n"
             "\n"
             "Examples:\n"
-            "  ✅ user 'find recent 2026 Double-11 beauty playbooks'\n"
-            "       -> search_web(query='2026 国货美妆 双十一 营销打法 投放节奏', topic='general', time_range='month')\n"
-            "  ✅ user 'what did Perfect Diary launch this week'\n"
-            "       -> search_web(query='完美日记 2026 新品发布', topic='news', time_range='week')\n"
-            "  ❌ user 'how did our team handle Double-11 last year' -> use search_knowledge, NOT this tool\n"
-            "  ❌ user 'open https://x.com/foo and summarize'        -> use web_fetch directly\n"
+            "  ✅ search_web(query='完美日记 小红书 新品推广', topic='general', time_range='month')\n"
+            "  ✅ search_web(query='抖音团购 餐饮到店 核销率', topic='news', time_range='week')\n"
+            "  ❌ query='2026 广州 餐饮 本地生活 抖音 团购 到店 营销 趋势'  (关键词堆砌，搜索引擎无法聚焦)\n"
+            "  ❌ query='beauty'  (太短，返回噪音)\n"
+            "  ❌ 内部历史问题 -> use search_knowledge, NOT this tool\n"
+            "  ❌ 已有具体 URL -> use web_fetch directly\n"
         ),
         "parameters": {
             "type": "object",
@@ -65,12 +77,12 @@ SCHEMA = {
                 "query": {
                     "type": "string",
                     "description": (
-                        "Search keywords. Best results when query packs industry/category/time/topic, "
-                        "5-20 words, no quoting and no `site:` operator (both are stripped).\n"
-                        "Good: '2026 domestic beauty Double 11 marketing strategy short video'\n"
-                        "Good: 'Perfect Diary 2026 Xiaohongshu launch playbook'\n"
-                        "Bad:  'beauty'         (too short, returns noise)\n"
-                        "Bad:  'tell me about beauty marketing for our brand please'  (verbose, low signal)"
+                        "搜索关键词，3-8 个词。一次只解决一个问题，需要多方面信息时分多次搜索。\n"
+                        "Good: '抖音团购 餐饮到店 投放策略'  (聚焦一个问题，7 个词)\n"
+                        "Good: '完美日记 小红书 新品推广'    (聚焦一个品牌，6 个词)\n"
+                        "Bad:  '2026 广州 餐饮 本地生活 抖音 团购 到店 营销 趋势'  (堆砌 10 个词，结果发散)\n"
+                        "Bad:  'beauty'  (太短，返回噪音)\n"
+                        "Bad:  'tell me about beauty marketing for our brand please'  (自然语言句子，低信噪比)"
                     ),
                 },
                 "topic": {
@@ -82,9 +94,12 @@ SCHEMA = {
                 "time_range": {
                     "type": "string",
                     "enum": ["day", "week", "month", "year"],
+                    "default": "month",
                     "description": (
-                        "Optional freshness filter. Use day/week with topic=news; month/year with topic=general. "
-                        "Omit when topic is timeless (e.g. methodology research)."
+                        "时间过滤，强烈建议每次都传。"
+                        "news 类搜索用 day 或 week；趋势/打法分析用 month；"
+                        "仅当搜索方法论、学术概念等不受时效影响的内容时才用 year。"
+                        "不传此参数会返回全时间范围结果，极易搜出过期内容。"
                     ),
                 },
                 "max_results": {
@@ -129,12 +144,117 @@ def _clean_snippet(snippet: str, limit: int = 300) -> str:
     return compact
 
 
+async def _search_metaso(query: str, max_results: int) -> dict:
+    """调用秘塔 AI 搜索 API，返回与 Tavily 同结构的结果字典。"""
+    timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=5.0)
+    payload = {
+        "q": query,
+        "scope": "webpage",
+        "includeSummary": True,
+        "size": max_results,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {METASO_API_KEY}",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout, http2=False) as client:
+            resp = await client.post(
+                f"{METASO_API_BASE}/search",
+                json=payload,
+                headers=headers,
+            )
+    except httpx.TimeoutException:
+        return _error("timeout", "秘塔 API 请求超时", query=query, retryable=True)
+    except Exception as exc:
+        logger.exception("秘塔 API 请求失败")
+        return _error("request_failed", f"{type(exc).__name__}: {exc}", query=query, retryable=True)
+
+    if resp.status_code == 401:
+        return _error("auth_error", "METASO_API_KEY 无效或已过期", query=query)
+    if resp.status_code == 429:
+        return _error("rate_limited", "秘塔 API 配额耗尽或限频", query=query, retryable=True)
+    if resp.status_code >= 400:
+        return _error(
+            "http_error",
+            f"秘塔 API 返回 HTTP {resp.status_code}: {resp.text[:200]}",
+            query=query,
+            retryable=resp.status_code in {408, 425, 429, 500, 502, 503, 504},
+        )
+
+    try:
+        data = resp.json()
+    except json.JSONDecodeError:
+        return _error("bad_json", f"秘塔 API 返回非 JSON: {resp.text[:200]}", query=query, retryable=True)
+
+    # 秘塔返回字段为 webpages（不是 results）
+    raw_results = data.get("webpages") or data.get("results") or []
+    results = []
+    for item in raw_results[:max_results]:
+        url = (item.get("link") or item.get("url") or "").strip()
+        if not url:
+            continue
+        results.append({
+            "title": (item.get("title") or "").strip() or "(untitled)",
+            "url": url,
+            "snippet": _clean_snippet(item.get("snippet") or item.get("content") or ""),
+        })
+
+    answer = (data.get("summary") or data.get("answer") or data.get("aiAnswer") or "").strip()
+
+    if not results and not answer:
+        return {
+            "ok": True,
+            "query": query,
+            "answer": "",
+            "results": [],
+            "result_count": 0,
+            "engine": "metaso",
+            "message": f"秘塔未找到 '{query}' 的相关结果。",
+            "untrusted_content": True,
+        }
+
+    return {
+        "ok": True,
+        "query": query,
+        "answer": answer,
+        "results": results,
+        "result_count": len(results),
+        "engine": "metaso",
+        "next_step": "Call web_fetch with one returned URL and a focused prompt when deep reading is needed.",
+        "untrusted_content": True,
+    }
+
+
 async def execute(params: dict, context: AgentContext) -> dict:
     original_query = (params.get("query") or "").strip()
     query = _clean_query(original_query)
     if not query:
         return _error("missing_query", "query cannot be empty after cleaning", query=original_query)
 
+    topic = params.get("topic") or "general"
+    time_range = params.get("time_range")
+    max_results = int(params.get("max_results") or TAVILY_DEFAULT_MAX_RESULTS)
+    max_results = max(1, min(10, max_results))
+
+    # ── 双引擎路由：含中文 → 秘塔，纯英文 → Tavily ──
+    use_metaso = _contains_chinese(query) and bool(METASO_API_KEY)
+    if _contains_chinese(query) and not METASO_API_KEY:
+        logger.warning(
+            "search_web: 中文查询但 METASO_API_KEY 未配置，降级到 Tavily (query=%s)", query[:60]
+        )
+
+    if use_metaso:
+        logger.info("search_web [引擎=秘塔] query=%s", query[:80])
+        result = await _search_metaso(query, max_results)
+        result.setdefault("original_query", original_query)
+        result.setdefault("topic", topic)
+        result.setdefault("time_range", time_range)
+        result.setdefault("max_results", max_results)
+        return result
+
+    # ── Tavily 路径（英文，或中文但无 METASO_API_KEY）──
+    logger.info("search_web [引擎=Tavily] query=%s", query[:80])
     if not TAVILY_API_KEY:
         logger.warning("search_web: TAVILY_API_KEY 未配置，跳过搜索 (query=%s)", query[:60])
         return _error(
@@ -142,11 +262,6 @@ async def execute(params: dict, context: AgentContext) -> dict:
             "TAVILY_API_KEY is not configured; cannot call web search.",
             query=query,
         )
-
-    topic = params.get("topic") or "general"
-    time_range = params.get("time_range")
-    max_results = int(params.get("max_results") or TAVILY_DEFAULT_MAX_RESULTS)
-    max_results = max(1, min(10, max_results))
 
     payload: dict = {
         "api_key": TAVILY_API_KEY,
@@ -229,6 +344,8 @@ async def execute(params: dict, context: AgentContext) -> dict:
             "original_query": original_query,
             "answer": "",
             "results": [],
+            "result_count": 0,
+            "engine": "tavily",
             "message": f"No web results found for '{query}'.",
             "untrusted_content": True,
         }
@@ -243,6 +360,7 @@ async def execute(params: dict, context: AgentContext) -> dict:
         "answer": answer,
         "results": results,
         "result_count": len(results),
+        "engine": "tavily",
         "next_step": "Call web_fetch with one returned URL and a focused prompt when deep reading is needed.",
         "untrusted_content": True,
     }

@@ -31,6 +31,8 @@ from config import (
     LLM_BASE_URL,
     LLM_MODEL,
     LLM_TIMEOUT_SECONDS,
+    METASO_API_BASE,
+    METASO_API_KEY,
     WEB_FETCH_MAX_BYTES,
     WEB_FETCH_MAX_CHARS_DEFAULT,
     WEB_FETCH_MAX_CHARS_LIMIT,
@@ -47,6 +49,36 @@ _RATE_WINDOW_SECONDS = 60
 _RATE_MAX_PER_DOMAIN = 12
 _FETCH_CACHE: dict[str, tuple[float, dict]] = {}
 _DOMAIN_HITS: dict[str, list[float]] = {}
+
+# 常见中文站域名集合（用于判断是否降级到秘塔 Reader）
+_CHINESE_PLATFORM_DOMAINS = {
+    "xiaohongshu.com", "xhslink.com",
+    "douyin.com", "tiktok.com",
+    "dianping.com", "meituan.com", "waimai.meituan.com",
+    "weibo.com", "weibo.cn",
+    "zhihu.com",
+    "bilibili.com",
+    "baidu.com", "tieba.baidu.com", "baike.baidu.com",
+    "taobao.com", "tmall.com", "jd.com", "pinduoduo.com",
+    "qq.com", "tencent.com",
+    "iqiyi.com", "youku.com",
+    "163.com", "sohu.com", "sina.com",
+    "kuaishou.com", "ks.cn",
+    "dewu.com", "poizon.com",
+    "kaola.com", "yanxuan.com",
+}
+
+
+def _is_chinese_domain(url: str) -> bool:
+    """判断 URL 是否属于中文站（.cn TLD 或已知中文平台）。"""
+    hostname = (urlparse(url).hostname or "").lower()
+    if hostname.endswith(".cn"):
+        return True
+    parts = hostname.split(".")
+    for i in range(len(parts) - 1):
+        if ".".join(parts[i:]) in _CHINESE_PLATFORM_DOMAINS:
+            return True
+    return False
 
 
 SCHEMA = {
@@ -412,6 +444,77 @@ async def _extract_for_prompt(content: str, prompt: str, max_tokens: int) -> tup
     return extracted.strip(), "llm", None
 
 
+async def _metaso_reader_fetch(url: str, prompt: str, max_tokens: int) -> dict:
+    """通过秘塔 Reader API 抓取中文网页，自动清洗广告返回正文。"""
+    timeout = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=5.0)
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {METASO_API_KEY}",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout, http2=False) as client:
+            resp = await client.post(
+                f"{METASO_API_BASE}/reader",
+                json={"url": url},
+                headers=headers,
+            )
+    except Exception as exc:
+        logger.warning("秘塔 Reader 请求失败: %s", exc)
+        return _error("request_failed", f"秘塔 Reader 请求失败: {type(exc).__name__}: {exc}", url=url, retryable=True)
+
+    if resp.status_code >= 400:
+        return _error(
+            "http_error",
+            f"秘塔 Reader 返回 HTTP {resp.status_code}: {resp.text[:200]}",
+            url=url,
+            retryable=resp.status_code in {500, 502, 503, 504},
+        )
+
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"content": resp.text}
+
+    content = (
+        data.get("content") or data.get("text") or data.get("body") or ""
+    ).strip()
+    title = (data.get("title") or "").strip() or urlparse(url).netloc
+
+    if not content:
+        return _error(
+            "empty_extraction",
+            "秘塔 Reader 返回空内容，页面可能需要登录或不受支持。",
+            url=url,
+        )
+
+    source_chars = len(content)
+    truncated_content = content[:WEB_FETCH_MAX_CHARS_DEFAULT]
+    extracted, extraction_method, warning = await _extract_for_prompt(truncated_content, prompt, max_tokens)
+    return {
+        "ok": True,
+        "title": title,
+        "url": url,
+        "final_url": url,
+        "status_code": resp.status_code,
+        "content_type": "text/html",
+        "format": "markdown",
+        "prompt": prompt,
+        "content": f"<fetched_content>\n{extracted}\n</fetched_content>",
+        "content_chars": len(extracted),
+        "source_chars": source_chars,
+        "truncated": source_chars > WEB_FETCH_MAX_CHARS_DEFAULT,
+        "max_chars": WEB_FETCH_MAX_CHARS_DEFAULT,
+        "max_tokens": max_tokens,
+        "redirects": [],
+        "robots": "skipped (metaso reader)",
+        "cache": "miss",
+        "extraction_method": extraction_method,
+        "extraction_backend": "metaso_reader",
+        "untrusted_content": True,
+        "warning": warning,
+    }
+
+
 async def execute(params: dict, context: AgentContext) -> dict:
     raw_url = (params.get("url") or "").strip()
     prompt = (params.get("prompt") or params.get("extract_query") or params.get("query") or "").strip()
@@ -483,6 +586,9 @@ async def execute(params: dict, context: AgentContext) -> dict:
             if redirect_error:
                 return redirect_error
     except httpx.TimeoutException:
+        if METASO_API_KEY and _is_chinese_domain(normalized_url):
+            logger.info("web_fetch: 超时，降级到秘塔 Reader (url=%s)", normalized_url[:80])
+            return await _metaso_reader_fetch(normalized_url, prompt, max_tokens)
         return _error(
             "timeout",
             f"request timed out after >{WEB_FETCH_TIMEOUT_SECONDS}s",
@@ -497,6 +603,9 @@ async def execute(params: dict, context: AgentContext) -> dict:
         return _error("request_failed", "no response returned", url=normalized_url)
 
     if resp.status_code >= 400:
+        if METASO_API_KEY and _is_chinese_domain(normalized_url) and resp.status_code in {403, 429, 500, 503, 521, 522, 523}:
+            logger.info("web_fetch: HTTP %d 反爬/限制，降级到秘塔 Reader (url=%s)", resp.status_code, normalized_url[:80])
+            return await _metaso_reader_fetch(normalized_url, prompt, max_tokens)
         return _error(
             "http_error",
             f"HTTP {resp.status_code}",
@@ -534,6 +643,9 @@ async def execute(params: dict, context: AgentContext) -> dict:
     if clean_error:
         return _error("extractor_unavailable", clean_error, url=normalized_url, final_url=final_url)
     if not cleaned:
+        if METASO_API_KEY and _is_chinese_domain(normalized_url):
+            logger.info("web_fetch: 正文提取为空，降级到秘塔 Reader (url=%s)", normalized_url[:80])
+            return await _metaso_reader_fetch(normalized_url, prompt, max_tokens)
         return _error(
             "empty_extraction",
             "body extraction is empty; page may require JavaScript rendering, login, or anti-bot handling.",
