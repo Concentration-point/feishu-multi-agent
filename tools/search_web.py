@@ -136,6 +136,7 @@ async def execute(params: dict, context: AgentContext) -> dict:
         return _error("missing_query", "query cannot be empty after cleaning", query=original_query)
 
     if not TAVILY_API_KEY:
+        logger.warning("search_web: TAVILY_API_KEY 未配置，跳过搜索 (query=%s)", query[:60])
         return _error(
             "missing_api_key",
             "TAVILY_API_KEY is not configured; cannot call web search.",

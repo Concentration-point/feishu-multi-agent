@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 
 # 进程级 asyncio 运行时修复（Windows: ProactorEventLoop -> SelectorEventLoop）。
@@ -96,6 +97,10 @@ L0_MESSAGE_WINDOW_RESERVE_TOKENS: int = int(os.getenv("L0_MESSAGE_WINDOW_RESERVE
 
 # ── 联网搜索 / 网页抓取配置（策略师专用）──
 TAVILY_API_KEY: str = os.getenv("TAVILY_API_KEY", "")
+if not TAVILY_API_KEY:
+    logging.getLogger(__name__).warning(
+        "TAVILY_API_KEY 未配置，search_web 工具将不可用（策略师无法搜索公网信息）"
+    )
 TAVILY_API_URL: str = os.getenv("TAVILY_API_URL", "https://api.tavily.com/search")
 TAVILY_DEFAULT_MAX_RESULTS: int = int(os.getenv("TAVILY_DEFAULT_MAX_RESULTS", "5"))
 TAVILY_TIMEOUT_SECONDS: float = float(os.getenv("TAVILY_TIMEOUT_SECONDS", "15"))

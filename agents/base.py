@@ -652,6 +652,7 @@ class BaseAgent:
                 or self.role_id
             ),
             role_id=self.role_id,
+            sub_id=(self._task_filter or {}).get("platform", ""),
         )
         messages: list[dict] = [
             {
@@ -764,6 +765,7 @@ class BaseAgent:
             record_id=self.record_id,
             project_name=proj.client_name or self.role_id,
             role_id=self.role_id,
+            sub_id=(self._task_filter or {}).get("platform", ""),
         )
 
         # 2. 加载历史经验
@@ -986,11 +988,22 @@ class BaseAgent:
                 self.soul.name, _pv + 1, _POST_VALIDATION_ROUNDS, missing,
             )
             self._publish("agent.post_validation", {"missing_tools": missing, "round": _pv + 1})
-            # reviewer 场景补充逐行提示，避免只调一次就结束
+            # reviewer 场景补充逐行提示 + 注入未审核行的 record_id
+            extra = ""
             if self.role_id == "reviewer" and "submit_review" in missing:
-                extra = "\n对每一条内容行必须独立调用一次 submit_review（不能合并处理），调用时须填写全部 dimensions 五个字段。"
-            else:
-                extra = ""
+                unreviewed = self._get_unreviewed_rows(messages)
+                if unreviewed:
+                    rows_hint = "\n".join(
+                        f"  - record_id={r['record_id']}, title={r['title']}"
+                        for r in unreviewed
+                    )
+                    extra = (
+                        f"\n以下 {len(unreviewed)} 条内容行尚未审核，"
+                        f"必须对每条独立调用一次 submit_review（不能合并处理），"
+                        f"调用时须填写全部 dimensions 五个字段：\n{rows_hint}"
+                    )
+                else:
+                    extra = "\n对每一条内容行必须独立调用一次 submit_review（不能合并处理），调用时须填写全部 dimensions 五个字段。"
             window.append({
                 "role": "user",
                 "content": (
@@ -1069,8 +1082,8 @@ class BaseAgent:
     def _check_required_tools(self, messages: list[dict]) -> list[str]:
         """检查 ReAct 历史中是否调用了当前角色的必需工具，且调用未以错误结束。
 
-        局限：只检查工具是否被调用过至少一次（不检查 per-row 覆盖率，
-        那需要在 Orchestrator 层读取内容行数后做额外校验）。
+        对 reviewer 角色额外检查 submit_review 的 per-row 覆盖率：
+        即使调用过至少一次，若仍有内容行未被覆盖也标记为缺失。
 
         Returns:
             缺失或全部结果为错误的工具名列表，空列表表示全部满足。
@@ -1117,7 +1130,75 @@ class BaseAgent:
             and tool_error_counts.get(t, 0) == tool_total_counts.get(t, 0)
         }
 
-        return [t for t in required if t not in called or t in all_failed]
+        missing = [t for t in required if t not in called or t in all_failed]
+
+        # reviewer per-row 覆盖率检查：submit_review 需覆盖全部内容行
+        if (
+            self.role_id == "reviewer"
+            and "submit_review" not in missing
+            and self._get_unreviewed_rows(messages)
+        ):
+            missing.append("submit_review")
+
+        return missing
+
+    def _get_unreviewed_rows(self, messages: list[dict]) -> list[dict]:
+        """从对话历史中提取未被 submit_review 覆盖的内容行。
+
+        通过解析 list_content 结果获取全量行，再对比 submit_review 调用参数，
+        返回尚未审核的行列表（含 record_id + title）。
+        """
+        tc_id_to_name: dict[str, str] = {}
+        tc_id_to_args: dict[str, str] = {}
+        for msg in messages:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            for tc in msg.get("tool_calls") or []:
+                if isinstance(tc, dict):
+                    fn = tc.get("function", {})
+                    tc_id = tc.get("id", "")
+                    tc_id_to_name[tc_id] = fn.get("name", "")
+                    tc_id_to_args[tc_id] = fn.get("arguments", "")
+
+        # 从 list_content 结果中提取全量 content rows
+        all_rows: dict[str, str] = {}  # record_id → title
+        for msg in messages:
+            if not isinstance(msg, dict) or msg.get("role") != "tool":
+                continue
+            tc_id = msg.get("tool_call_id", "")
+            if tc_id_to_name.get(tc_id) != "list_content":
+                continue
+            content = msg.get("content", "")
+            try:
+                rows = json.loads(content)
+                if isinstance(rows, list):
+                    for r in rows:
+                        if isinstance(r, dict) and r.get("record_id"):
+                            all_rows[r["record_id"]] = r.get("title", "")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        if not all_rows:
+            return []
+
+        # 从 submit_review 调用中提取已审核的 record_ids
+        reviewed: set[str] = set()
+        for tc_id, name in tc_id_to_name.items():
+            if name != "submit_review":
+                continue
+            try:
+                args = json.loads(tc_id_to_args.get(tc_id, ""))
+                rid = args.get("content_record_id", "")
+                if rid:
+                    reviewed.add(rid)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        return [
+            {"record_id": rid, "title": title}
+            for rid, title in all_rows.items()
+            if rid not in reviewed
+        ]
 
     async def _load_experiences(self, project_type: str) -> str:
         """从两源加载历史经验拼为 prompt 段落：

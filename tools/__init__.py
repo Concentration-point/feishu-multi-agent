@@ -39,6 +39,7 @@ class AgentContext:
     record_id: str
     project_name: str
     role_id: str
+    sub_id: str = ""
 
 
 class ToolRegistry:
@@ -138,22 +139,34 @@ class ToolRegistry:
             result = await self._tools[tool_name]["execute"](params, context)
             duration_ms = round((time.monotonic() - t0) * 1000)
             self._cb_state(tool_name)["failures"] = 0
-            _write_stat({
+            # 检测业务级错误：dict 含 ok=False 或 str 以"错误:"开头
+            biz_ok = True
+            biz_error = None
+            if isinstance(result, dict) and result.get("ok") is False:
+                biz_ok = False
+                biz_error = result.get("error_type", "biz_error")
+            elif isinstance(result, str) and result.startswith("错误:"):
+                biz_ok = False
+                biz_error = "biz_error"
+            stat: dict = {
                 "event": "tool_call",
                 "tool": tool_name,
-                "success": True,
-                "error": None,
+                "success": biz_ok,
+                "error": biz_error,
                 "duration_ms": duration_ms,
                 "record_id": context.record_id,
                 "role_id": context.role_id,
-            })
+            }
+            if context.sub_id:
+                stat["sub_id"] = context.sub_id
+            _write_stat(stat)
             return result if isinstance(result, str) else json.dumps(
                 result, ensure_ascii=False
             )
         except Exception as e:
             duration_ms = round((time.monotonic() - t0) * 1000)
             logger.error("工具 %s 执行异常: %s", tool_name, e, exc_info=True)
-            _write_stat({
+            stat_err: dict = {
                 "event": "tool_call",
                 "tool": tool_name,
                 "success": False,
@@ -161,7 +174,10 @@ class ToolRegistry:
                 "duration_ms": duration_ms,
                 "record_id": context.record_id,
                 "role_id": context.role_id,
-            })
+            }
+            if context.sub_id:
+                stat_err["sub_id"] = context.sub_id
+            _write_stat(stat_err)
             state = self._cb_state(tool_name)
             state["failures"] += 1
             if state["failures"] >= TOOL_CB_THRESHOLD:

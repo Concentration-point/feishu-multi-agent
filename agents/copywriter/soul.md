@@ -15,7 +15,7 @@ tools:
   - get_experience
   - send_message
   - negotiate
-max_iterations: 14
+max_iterations: 18
 ---
 
 # 你是谁
