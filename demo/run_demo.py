@@ -86,7 +86,17 @@ async def create_demo_brief(scene: str) -> str:
     return await client.create_record(PROJECT_TABLE_ID, fields)
 
 
-async def print_summary(record_id: str) -> None:
+def _preview(text: str | None, max_len: int = 200) -> str:
+    """取文本前 max_len 字符作为摘要预览，折叠换行。"""
+    if not text or not text.strip():
+        return "（空）"
+    flat = text.strip().replace("\n", " | ")
+    if len(flat) > max_len:
+        return flat[:max_len] + "..."
+    return flat
+
+
+async def print_summary(record_id: str, elapsed: float = 0.0) -> None:
     from memory.project import ContentMemory, ProjectMemory
 
     pm = ProjectMemory(record_id)
@@ -97,32 +107,71 @@ async def print_summary(record_id: str) -> None:
     drafted = [row for row in rows if row.draft and row.draft.strip()]
     approved = [row for row in rows if row.review_status == "通过"]
     scheduled = [row for row in rows if row.publish_date]
+    content_count = len(rows) or 1
 
-    print("\n" + "=" * 60)
-    print("Demo 结果总览")
-    print("=" * 60)
-    print(f"record_id: {record_id}")
-    print(f"客户名称: {project.client_name}")
-    print(f"项目类型: {project.project_type}")
-    print(f"项目状态: {project.status}")
-    print(f"Brief 解读长度: {len(project.brief_analysis or '')}")
-    print(f"策略方案长度: {len(project.strategy or '')}")
-    print(f"审核总评长度: {len(project.review_summary or '')}")
-    print(f"交付摘要长度: {len(project.delivery or '')}")
+    print("\n" + "=" * 70)
+    print("  Demo 结果总览")
+    print("=" * 70)
+    print(f"record_id:  {record_id}")
+    print(f"客户名称:   {project.client_name}")
+    print(f"项目类型:   {project.project_type}")
+    print(f"项目状态:   {project.status}")
     print(f"审核通过率: {project.review_pass_rate:.0%}")
-    print(f"内容总数: {len(rows)}")
-    print(f"已有成稿: {len(drafted)}/{len(rows)}")
-    print(f"审核通过: {len(approved)}/{len(rows)}")
-    print(f"已排期: {len(scheduled)}/{len(rows)}")
+    print(f"内容统计:   共 {len(rows)} 条 | 成稿 {len(drafted)} | 通过 {len(approved)} | 已排期 {len(scheduled)}")
 
+    # ── AI 各阶段产出预览 ──
+    print("\n" + "-" * 70)
+    print("  AI 产出预览（各阶段关键输出）")
+    print("-" * 70)
+
+    print(f"\n[客户经理] Brief 解读（{len(project.brief_analysis or '')} 字）:")
+    print(f"  {_preview(project.brief_analysis)}")
+
+    print(f"\n[策略师] 策略方案（{len(project.strategy or '')} 字）:")
+    print(f"  {_preview(project.strategy)}")
+
+    print(f"\n[审核] 审核总评（{len(project.review_summary or '')} 字）:")
+    print(f"  {_preview(project.review_summary)}")
+
+    print(f"\n[项目经理] 交付摘要（{len(project.delivery or '')} 字）:")
+    print(f"  {_preview(project.delivery)}")
+
+    # ── 内容明细 + 成稿预览 ──
     if rows:
-        print("\n内容明细:")
+        print("\n" + "-" * 70)
+        print("  内容明细（文案成稿预览）")
+        print("-" * 70)
         for row in rows:
-            print(
-                f"- #{row.seq} {row.title} | {row.platform} | {row.content_type} | "
-                f"审核={row.review_status or '-'} | 发布={row.publish_date or '-'}"
-            )
-    print("=" * 60)
+            status_tag = row.review_status or "-"
+            date_tag = row.publish_date or "-"
+            print(f"\n  #{row.seq} [{row.platform}] {row.title}")
+            print(f"     类型={row.content_type} | 审核={status_tag} | 发布={date_tag}")
+            draft_preview = _preview(row.draft, 120)
+            print(f"     成稿: {draft_preview}")
+
+    # ── 效率对比 ──
+    if elapsed > 0:
+        human_hours = {
+            "Brief 解读": 2.0,
+            "策略制定": 4.0,
+            "文案撰写": content_count * 1.5,
+            "内容审核": content_count * 0.5,
+            "排期交付": 1.0,
+        }
+        total_human = sum(human_hours.values())
+        ai_min = elapsed / 60
+
+        print("\n" + "-" * 70)
+        print("  效率对比（AI vs 人工估算）")
+        print("-" * 70)
+        for step, hours in human_hours.items():
+            print(f"  {step:<10} 人工约 {hours:.1f}h")
+        print(f"  {'─' * 30}")
+        print(f"  人工合计:  {total_human:.1f} 工时（{total_human / 8:.1f} 人天）")
+        print(f"  AI 耗时:   {ai_min:.1f} 分钟")
+        print(f"  效率提升:  ~{total_human * 60 / max(elapsed, 1):.0f}x")
+
+    print("\n" + "=" * 70)
 
 
 async def main() -> int:
@@ -163,7 +212,7 @@ async def main() -> int:
             print(f"  error: {item.error[:200]}")
 
     print(f"\n总耗时: {elapsed:.1f}s")
-    await print_summary(record_id)
+    await print_summary(record_id, elapsed=elapsed)
     return 0
 
 
