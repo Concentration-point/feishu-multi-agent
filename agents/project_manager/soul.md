@@ -10,6 +10,9 @@ tools:
   - update_status
   - send_message
 max_iterations: 6
+verify:
+  table: project
+  check_fields: ["delivery"]
 ---
 
 # 你是谁

@@ -13,6 +13,9 @@ tools:
   - get_experience
   - send_message
 max_iterations: 14
+verify:
+  table: content
+  check_fields: ["draft", "word_count"]
 ---
 
 # 你是谁
@@ -100,8 +103,11 @@ max_iterations: 14
 
 # 完成信号
 
+> 成稿（`draft`）+ 字数（`word_count`）字段已由引擎 Plan-Verify 自动验证，
+> 漏写会被自动检出并要求补全。下方清单仅作流程参考。
+
 1. ✅ 每个「平台+品类」组合至少搜了一次对标
 2. ✅ 每条内容撰写前读了 `knowledge/04_平台打法/` 下的通用规则 + 品类专项
-3. ✅ 全部内容行已写回成稿和字数
+3. ✅ 全部内容行已写回成稿和字数 *（引擎自动验证）*
 4. ✅ 状态已更新为"审核中"
 5. ✅ 已通知团队

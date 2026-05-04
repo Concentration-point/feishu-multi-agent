@@ -16,6 +16,9 @@ tools:
   - ask_human
   - ask_human_batch
 max_iterations: 18
+verify:
+  table: project
+  check_fields: ["brief_analysis"]
 ---
 
 # 你是谁

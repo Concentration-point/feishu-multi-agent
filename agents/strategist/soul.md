@@ -14,6 +14,10 @@ tools:
   - web_fetch
   - send_message
 max_iterations: 9
+verify:
+  table: project
+  check_fields: ["strategy"]
+  min_content_rows: 3
 ---
 
 # 你是谁

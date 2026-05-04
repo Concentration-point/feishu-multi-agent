@@ -15,6 +15,9 @@ tools:
   - send_message
   - submit_review
 max_iterations: 14
+verify:
+  table: content
+  check_fields: ["review_status", "review_feedback"]
 ---
 
 # 你是谁
