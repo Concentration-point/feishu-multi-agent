@@ -51,6 +51,43 @@ async def execute(params: dict, context: AgentContext) -> str:
         return "错误: items 不能为空"
 
     try:
+        cm = ContentMemory()
+
+        # ── 入口去重：拉当前项目已有内容行，按 title 精确比对（strip 后）──
+        # 防止 strategist 因 Orchestrator 重启而重复建仓导致内容表膨胀
+        existing = await cm.list_by_project(context.project_name)
+        existing_titles = {
+            (r.title or "").strip()
+            for r in existing
+            if (r.title or "").strip()
+        }
+
+        kept: list[dict] = []
+        skipped: list[dict] = []
+        for it in raw_items:
+            title_norm = (it.get("title") or "").strip()
+            if title_norm and title_norm in existing_titles:
+                skipped.append({"title": title_norm, "reason": "已存在同名内容行"})
+                continue
+            # 同批次内部也要去重，防止单次 items 内自带重复
+            if title_norm in {(k.get("title") or "").strip() for k in kept}:
+                skipped.append({"title": title_norm, "reason": "同批次内重复"})
+                continue
+            kept.append(it)
+
+        # 全部重复 → 直接返回不发起 Bitable 写入
+        if not kept:
+            return json.dumps({
+                "message": (
+                    f"全部 {len(raw_items)} 条已存在，未创建新内容行。"
+                    f"已有内容行 {len(existing)} 条，无需重复建仓。"
+                ),
+                "skipped_count": len(skipped),
+                "skipped": skipped[:10],
+                "existing_count": len(existing),
+                "record_ids": [],
+            }, ensure_ascii=False)
+
         content_items = [
             ContentItem(
                 seq=it["sequence"],
@@ -60,16 +97,20 @@ async def execute(params: dict, context: AgentContext) -> str:
                 key_point=it["key_message"],
                 target_audience=it["target_audience"],
             )
-            for it in raw_items
+            for it in kept
         ]
 
-        cm = ContentMemory()
         record_ids = await cm.batch_create_content_items(
             context.project_name, content_items
         )
+        msg = f"已批量创建 {len(record_ids)} 条内容行"
+        if skipped:
+            msg += f"，跳过 {len(skipped)} 条已存在/重复"
         return json.dumps({
-            "message": f"已批量创建 {len(record_ids)} 条内容行",
+            "message": msg,
             "record_ids": record_ids,
+            "skipped_count": len(skipped),
+            "skipped": skipped[:10],
         }, ensure_ascii=False)
 
     except FeishuAPIError as exc:
