@@ -215,11 +215,13 @@ class ExperienceManager:
     # ── 写入 ──
 
     async def save_experience(
-        self, card: dict, confidence: float, project_name: str
+        self, card: dict, confidence: float, project_name: str,
+        _skip_auto_optimize: bool = False,
     ) -> str | None:
         """将经验卡片双写到 Bitable 经验池表和 Chroma 向量库，返回 record_id。
 
         两个写入独立：任一失败只打 warning，不影响另一个。
+        _skip_auto_optimize=True 由 optimize_bucket 内部调用时传入，防止递归触发。
         """
         ok, reason = _is_card_quality_ok(card)
         if not ok:
@@ -297,6 +299,7 @@ class ExperienceManager:
                     FE["confidence"]: confidence,
                     FE["use_count"]: 0,
                     FE["source_project"]: project_name,
+                    FE["status"]: "启用",
                 }
                 try:
                     record_id = await self._client.create_record(self._table_id, fields)
@@ -328,6 +331,11 @@ class ExperienceManager:
                             chroma_id, role, confidence)
             except Exception as e:
                 logger.warning("经验写入 Chroma 失败: role=%s err=%s", role, e)
+
+        # 写入成功后检查桶大小，超限自动触发合并（_skip_auto_optimize 防止 optimize_bucket 内递归）
+        if not _skip_auto_optimize and record_ids and self._table_configured:
+            for role in {r for r in roles if r}:
+                await self._auto_check_and_optimize_bucket(role, category, project_name)
 
         return record_ids[0] if record_ids else None
 
@@ -396,39 +404,73 @@ class ExperienceManager:
     async def query_top_k(
         self, role_id: str, task_brief: str = "", k: int | None = None
     ) -> list[dict]:
-        """语义检索 top-K 经验卡片。
+        """语义检索 top-K 经验卡片（读时校验架构）。
 
-        用 task_brief 做 Chroma 语义检索，where 只过滤 role_id，
-        候选集内按 confidence 降序取 top-K，命中记录的 use_count +1。
+        Chroma 只做语义召回，Bitable 是状态和排序的权威源：
+        1. Chroma 召回 20 条候选（不过滤 status）
+        2. 拿 record_id 去 Bitable 批量查 status/confidence/use_count
+        3. 过滤 status=禁用，按 Bitable confidence 降序取 top-K
+        4. use_count +1 只写 Bitable
         """
         k = k or EXPERIENCE_TOP_K
 
-        # 从 Chroma 语义检索候选（过量拉取再按 confidence 筛选）
+        # 第一步：Chroma 语义召回，固定 n=20，不过滤 status
         store = ExperienceVectorStore()
-        candidates = store.query(task_brief or role_id, role_id=role_id, k=k * 3)
+        candidates = store.query(task_brief or role_id, role_id=role_id, k=20)
 
-        # 过滤置信度不足的记录
-        filtered = [
-            c for c in candidates
-            if _safe_float(c["metadata"].get("confidence", 0)) >= EXPERIENCE_CONFIDENCE_THRESHOLD
-        ]
+        if not candidates:
+            return []
 
-        # 按 confidence 降序取 top-K
-        filtered.sort(
-            key=lambda c: _safe_float(c["metadata"].get("confidence", 0)),
-            reverse=True,
-        )
+        # 第二步：Bitable 批量查 status/confidence/use_count（Bitable 是权威源）
+        chroma_by_id = {c["id"]: c for c in candidates}
+        bitable_ids = [c["id"] for c in candidates if not c["id"].startswith("chroma-")]
+
+        bitable_records: dict[str, dict] = {}
+        if self._table_configured and bitable_ids:
+            bitable_records = await self._client.batch_get_records(self._table_id, bitable_ids)
+
+        # 第三步：合并数据，过滤 status=禁用
+        filtered: list[dict] = []
+        for chroma_item in candidates:
+            rid = chroma_item["id"]
+            if rid in bitable_records:
+                # Bitable 权威：status/confidence/use_count 全以 Bitable 为准
+                fields = bitable_records[rid]
+                if fields.get(FE["status"], "启用") == "禁用":
+                    continue
+                confidence = _safe_float(fields.get(FE["confidence"], 0))
+                use_count = _safe_int(fields.get(FE["use_count"], 0))
+            else:
+                # 降级：无 Bitable 记录（chroma- 前缀或批量查询失败），用 Chroma metadata
+                meta = chroma_item["metadata"]
+                confidence = _safe_float(meta.get("confidence", 0))
+                use_count = _safe_int(meta.get("use_count", 0))
+
+            if confidence < EXPERIENCE_CONFIDENCE_THRESHOLD:
+                continue
+
+            filtered.append({
+                "_record_id": rid,
+                "_confidence": confidence,
+                "_use_count": use_count,
+                "_document": chroma_item["document"],
+                "_metadata": chroma_item["metadata"],
+            })
+
+        # 第四步：按 Bitable confidence 降序取 top-K（不用 Chroma 语义相似度排序）
+        filtered.sort(key=lambda x: x["_confidence"], reverse=True)
         top_k = filtered[:k]
 
-        # 更新 Bitable use_count +1（不阻塞，失败静默）
+        # 第五步：use_count +1 只写 Bitable，不更新 Chroma metadata
         if self._table_configured:
             for item in top_k:
-                record_id = item["id"]
-                use_count = _safe_int(item["metadata"].get("use_count", 0))
+                rid = item["_record_id"]
+                if rid.startswith("chroma-"):
+                    continue
                 try:
                     await self._client.update_record(
-                        self._table_id, record_id,
-                        {FE["use_count"]: use_count + 1},
+                        self._table_id, rid,
+                        {FE["use_count"]: item["_use_count"] + 1},
                     )
                 except Exception:
                     pass
@@ -436,18 +478,17 @@ class ExperienceManager:
         # 解析返回
         results = []
         for item in top_k:
-            meta = item["metadata"]
-            content_raw = item["document"]
+            content_raw = item["_document"]
             try:
                 saol = json.loads(content_raw)
             except (json.JSONDecodeError, TypeError):
                 saol = {"lesson": content_raw}
             results.append({
-                "record_id": item["id"],
-                "role": meta.get("role_id", ""),
-                "category": meta.get("category", ""),
-                "confidence": _safe_float(meta.get("confidence", 0)),
-                "use_count": _safe_int(meta.get("use_count", 0)),
+                "record_id": item["_record_id"],
+                "role": item["_metadata"].get("role_id", ""),
+                "category": item["_metadata"].get("category", ""),
+                "confidence": item["_confidence"],
+                "use_count": item["_use_count"],
                 **saol,
             })
 
@@ -702,6 +743,30 @@ class ExperienceManager:
             raise ValueError("LLM 合并结果没有可写入的有效经验")
         return merged_cards
 
+    async def _auto_check_and_optimize_bucket(
+        self, role_id: str, category: str, project_name: str
+    ) -> None:
+        """写入后自动检查桶大小，超限则触发 optimize_bucket（只打 warning，不阻塞主流程）。"""
+        try:
+            records = await self._list_bucket_records(role_id, category)
+            count = len(records)
+            if count <= EXPERIENCE_MAX_PER_CATEGORY:
+                return
+            logger.info(
+                "经验桶超限，自动触发合并: role=%s cat=%s count=%d > max=%d",
+                role_id, category, count, EXPERIENCE_MAX_PER_CATEGORY,
+            )
+            summary = await self.optimize_bucket(role_id, category, project_name)
+            logger.info(
+                "经验桶自动合并完成: role=%s cat=%s 合并前=%d 合并后=%d",
+                role_id, category, count, summary.get("merged_created", 0),
+            )
+        except Exception as exc:
+            logger.warning(
+                "经验桶自动合并失败（不阻塞主流程）: role=%s cat=%s err=%s",
+                role_id, category, exc,
+            )
+
     async def optimize_bucket(
         self,
         role_id: str,
@@ -763,7 +828,7 @@ class ExperienceManager:
 
         for card in merged_cards:
             confidence = _safe_float(card.pop("_merged_confidence", max_confidence))
-            await self.save_experience(card, confidence, project_name or "经验优化")
+            await self.save_experience(card, confidence, project_name or "经验优化", _skip_auto_optimize=True)
             await self.save_to_wiki(card, confidence)
             summary["merged_created"] += 1
 

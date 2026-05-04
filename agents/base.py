@@ -31,7 +31,7 @@ from config import (
     L0_MESSAGE_WINDOW_MAX_TOKENS, L0_MESSAGE_WINDOW_RESERVE_TOKENS,
     EXPERIENCE_POOL_ROLE_ALLOWLIST,
 )
-from memory.project import ProjectMemory
+from memory.project import BriefProject, ProjectMemory
 from memory.experience import ExperienceManager
 from memory.working import MessageWindow
 from tools import ToolRegistry, AgentContext
@@ -565,6 +565,8 @@ class BaseAgent:
 
         # 经验暂存（Hook 蒸馏后自主写入 wiki，也供 Orchestrator 写 Bitable）
         self._pending_experience: dict | None = None
+        # 本次运行注入到 system prompt 的经验条数（Chroma top-K 命中数）
+        self._injected_experience_count: int = 0
         # 标记 Agent 是否已自主完成 wiki 写入
         self._wiki_written: bool = False
         # 空 turn 计数（防 LLM reasoning 后不产出 tool_use 也不产出 text）
@@ -1275,6 +1277,7 @@ class BaseAgent:
             )
             if experiences:
                 bitable_count = len(experiences)
+                self._injected_experience_count += bitable_count
                 lines.append("## 过往高分经验（基于 Chroma 语义检索 top-K）")
                 lines.append("以下是你在类似场景中积累的经验，请参考但不要机械照搬：")
                 for i, exp in enumerate(experiences, 1):

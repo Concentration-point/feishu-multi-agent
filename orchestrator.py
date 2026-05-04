@@ -170,6 +170,7 @@ class Orchestrator:
             return self.stage_results
 
         project_name = proj.client_name or "未知客户"
+        project_type = (proj.project_type or "").strip()
         brief_summary = (proj.brief or "")[:200]
         current_status = (proj.status or "").strip()
 
@@ -520,6 +521,7 @@ class Orchestrator:
                 print(f"[Orchestrator] 警告: 交付文档生成失败: {type(exc).__name__}: {exc}")
 
         await self._settle_experiences(pending_experiences, project_name, pass_rate)
+        await self._append_evolution_log(project_name, project_type, pass_rate, pending_experiences)
         return self.stage_results
 
     async def _run_stage_with_agent(
@@ -1683,6 +1685,61 @@ class Orchestrator:
             color="green",
         )
         return doc_url
+
+    async def _append_evolution_log(
+        self,
+        project_name: str,
+        project_type: str,
+        pass_rate: float | None,
+        pending_experiences: list[dict] | None = None,
+    ) -> None:
+        """将本次运行关键指标追加写入 evolution_log.json。写入失败只打日志不阻塞。"""
+        import json as _json
+        from datetime import datetime, timezone
+        from pathlib import Path
+
+        log_path = Path("evolution_log.json")
+
+        # 从所有 Agent 实例汇总本次注入的经验条数
+        experiences_injected = sum(
+            getattr(item.get("agent"), "_injected_experience_count", 0)
+            for item in (pending_experiences or [])
+            if item.get("agent") is not None
+        )
+
+        # 统计内容行数
+        content_count = 0
+        try:
+            rows = await ContentMemory().list_by_project(project_name)
+            content_count = len(rows)
+        except Exception:
+            pass
+
+        entry = {
+            "run_id": self.record_id,
+            "project_type": project_type or "未知",
+            "experiences_injected": int(experiences_injected),
+            "review_pass_rate": round(float(pass_rate), 4) if pass_rate is not None else 0.0,
+            "rework_count": int(self.reviewer_retries),
+            "content_count": int(content_count),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        try:
+            if log_path.exists():
+                existing = _json.loads(log_path.read_text(encoding="utf-8"))
+                if not isinstance(existing, list):
+                    existing = []
+            else:
+                existing = []
+            existing.append(entry)
+            log_path.write_text(
+                _json.dumps(existing, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            logger.info("evolution_log.json 已追加: run_id=%s entries=%d", self.record_id, len(existing))
+        except Exception as exc:
+            logger.warning("evolution_log.json 写入失败（不阻塞主流程）: %s", exc)
 
     async def _settle_experiences(
         self,

@@ -10,7 +10,6 @@ tools:
   - search_knowledge
   - read_knowledge
   - search_reference
-  - write_wiki
   - get_experience
   - send_message
 max_iterations: 14
