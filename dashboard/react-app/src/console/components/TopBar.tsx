@@ -14,6 +14,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Play, Radio, Database, GitBranch, ShieldCheck } from "lucide-react";
 import { useConsoleStore } from "../useConsoleStore";
+import { ReportTrigger } from "./ReportTrigger";
 import type { AgentSession, RoleId } from "../types";
 
 const ROLES: { id: RoleId; label: string }[] = [
@@ -368,6 +369,9 @@ export function TopBar({ session, isLive = false, onShowPicker }: TopBarProps) {
             {isLive ? "LIVE" : "MOCK"}
           </motion.span>
         </AnimatePresence>
+
+        {/* 数据分析（独立 Agent，触发后推送到飞书群 + 知识空间） */}
+        <ReportTrigger />
 
         {/* 选项目 */}
         {onShowPicker && (

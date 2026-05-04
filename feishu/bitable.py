@@ -253,6 +253,25 @@ class BitableClient:
             "update_record table=%s record=%s OK", table_id, record_id
         )
 
+    async def batch_get_records(
+        self, table_id: str, record_ids: list[str]
+    ) -> dict[str, dict]:
+        """并发获取多条记录，返回 {record_id: fields} 字典。
+
+        并发受 BITABLE_CONCURRENCY_LIMIT=5 限制，20 条约 4 轮完成（< 3s）。
+        某条失败时记 warning 并跳过，不影响其他条目。
+        """
+        tasks = [self.get_record(table_id, rid) for rid in record_ids]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        out: dict[str, dict] = {}
+        for rid, result in zip(record_ids, results):
+            if isinstance(result, Exception):
+                logger.warning("batch_get_records: record=%s failed: %s", rid, result)
+                continue
+            out[rid] = result
+        logger.info("batch_get_records table=%s total=%d ok=%d", table_id, len(record_ids), len(out))
+        return out
+
     async def delete_record(self, table_id: str, record_id: str) -> None:
         """删除单条记录。"""
         url = f"{self._table_url(table_id)}/{record_id}"

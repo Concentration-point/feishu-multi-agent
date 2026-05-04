@@ -181,6 +181,7 @@ FIELD_MAP_EXPERIENCE = {
     "confidence": "置信度",
     "use_count": "使用次数",
     "source_project": "来源项目",
+    "status": "状态",
 }
 
 # ── 经验升格审批表字段映射 ──
