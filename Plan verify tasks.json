@@ -1,0 +1,231 @@
+{
+  "phase": "BaseAgent Plan-Verify 机制",
+  "goal": "在 BaseAgent 引擎层实现通用的 Pre-Task Plan + Post-Task Verify 机制。Agent 开始前从 Bitable 读真实数据生成完成计划，结束前用代码（不调 LLM）逐条验证是否真的做完了，没做完就继续循环。每个角色通过 soul.md frontmatter 的 verify 配置声明自己的完成标准。",
+  "rules": "每次只取一个任务执行，完成后逐条对照验收标准自检，报告结果后等待确认再取下一个。",
+  "tasks": [
+    {
+      "id": "PV-01",
+      "title": "解析 soul.md frontmatter 中的 verify 配置",
+      "description": "修改 BaseAgent 的 soul.md 解析逻辑，在读取现有的 name / role_id / tools / max_iterations 之外，增加读取 verify 字段。verify 是一个 dict，结构如下：\n\n```yaml\nverify:\n  table: content|project\n  check_fields: [\"field_name_1\", \"field_name_2\"]\n  min_content_rows: 3  # 可选，策略师用\n```\n\nverify 字段不存在时默认为 None，表示该角色不启用 Plan-Verify。解析后存入 self._verify_config。",
+      "files": ["agents/base.py"],
+      "depends_on": [],
+      "acceptance": [
+        "BaseAgent.__init__ 中能正确解析 verify 配置",
+        "verify 不存在时 self._verify_config 为 None",
+        "verify 存在时 self._verify_config 是包含 table / check_fields 的 dict",
+        "min_content_rows 是可选字段，不存在时不报错",
+        "不影响现有的 name / role_id / tools / max_iterations 解析"
+      ],
+      "status": "pending",
+      "estimated_minutes": 15
+    },
+    {
+      "id": "PV-02",
+      "title": "实现 _generate_plan 方法（content 表模式）",
+      "description": "在 BaseAgent 中新增 _generate_plan 方法。当 verify_config.table == 'content' 时：调 list_content 获取当前项目的所有内容行，为每行生成一个 plan item，包含 record_id / title / platform / check_fields。plan 存入 self._task_plan 列表。\n\n这是纯代码逻辑，不调 LLM。plan 的数据全部来自 Bitable 的真实内容行。\n\n如果 list_content 返回空（内容行还没创建），plan 为空列表。",
+      "files": ["agents/base.py"],
+      "depends_on": ["PV-01"],
+      "acceptance": [
+        "_generate_plan 方法存在且为 async",
+        "verify_config 为 None 时返回空列表",
+        "verify_config.table == 'content' 时返回的 plan 条目数 == 内容行数",
+        "每个 plan item 包含 record_id / title / platform / check_fields",
+        "check_fields 来自 verify_config 而不是硬编码",
+        "不调 LLM"
+      ],
+      "status": "pending",
+      "estimated_minutes": 20
+    },
+    {
+      "id": "PV-03",
+      "title": "实现 _generate_plan 方法（project 表模式）",
+      "description": "扩展 _generate_plan 方法。当 verify_config.table == 'project' 时：生成一个 plan item，check_fields 为 verify_config 中声明的项目主表字段列表。如果 verify_config 中有 min_content_rows 配置，额外生成一个 plan item 检查内容排期表的行数。",
+      "files": ["agents/base.py"],
+      "depends_on": ["PV-02"],
+      "acceptance": [
+        "verify_config.table == 'project' 时返回 plan 包含项目字段检查项",
+        "有 min_content_rows 时 plan 中包含内容行数量检查项",
+        "无 min_content_rows 时不报错，只检查项目字段"
+      ],
+      "status": "pending",
+      "estimated_minutes": 15
+    },
+    {
+      "id": "PV-04",
+      "title": "实现 _verify_plan 方法（content 表模式）",
+      "description": "在 BaseAgent 中新增 _verify_plan 方法。当 verify_config.table == 'content' 时：重新从 Bitable 调 list_content 读取所有内容行的最新数据，逐行对照 plan 检查 check_fields 中的每个字段是否非空。返回 gaps 列表，每个 gap 包含 record_id / title / field / reason。\n\n纯代码逻辑，不调 LLM。判断标准就是字段值 strip() 后是否为空字符串。",
+      "files": ["agents/base.py"],
+      "depends_on": ["PV-02"],
+      "acceptance": [
+        "_verify_plan 方法存在且为 async",
+        "verify_config 为 None 时返回空列表（表示不需要验证）",
+        "plan 为空时返回空列表",
+        "从 Bitable 重新读取数据（不依赖缓存或 Agent 自报）",
+        "字段非空 → 该项不出现在 gaps 中",
+        "字段为空 → 出现在 gaps 中，包含 record_id / title / field / reason",
+        "不调 LLM"
+      ],
+      "status": "pending",
+      "estimated_minutes": 25
+    },
+    {
+      "id": "PV-05",
+      "title": "实现 _verify_plan 方法（project 表模式）",
+      "description": "扩展 _verify_plan 方法。当 verify_config.table == 'project' 时：从 Bitable 调 read_project 读取项目主表最新数据，检查 check_fields 中的字段是否非空。如果 plan 中有内容行数量检查项，调 list_content 检查行数是否 >= min_content_rows。",
+      "files": ["agents/base.py"],
+      "depends_on": ["PV-03", "PV-04"],
+      "acceptance": [
+        "项目字段为空时出现在 gaps 中",
+        "内容行数不足时出现在 gaps 中，reason 包含实际数量和要求数量",
+        "从 Bitable 重新读取数据"
+      ],
+      "status": "pending",
+      "estimated_minutes": 15
+    },
+    {
+      "id": "PV-06",
+      "title": "实现 _format_gaps 方法",
+      "description": "在 BaseAgent 中新增 _format_gaps 方法，将 gaps 列表格式化为人类可读的文本，用于追加到 messages 中让 Agent 知道哪些没完成。\n\n格式示例：\n```\n自检发现以下未完成项：\n1. 内容行 c003「成分党必看」：draft_content 为空，还未撰写成稿\n2. 内容行 c005「通勤穿搭指南」：word_count 为空，成稿已写但字数未填\n3. 项目主表：strategy 字段为空，策略方案未写入\n\n请继续完成以上缺失项。\n```",
+      "files": ["agents/base.py"],
+      "depends_on": ["PV-04"],
+      "acceptance": [
+        "gaps 为空时返回空字符串",
+        "每个 gap 格式化为一行，包含位置（内容行/项目主表）+ 字段名 + 原因",
+        "内容行的 gap 包含标题信息（如果有）",
+        "末尾有一句引导 Agent 继续完成的提示"
+      ],
+      "status": "pending",
+      "estimated_minutes": 10
+    },
+    {
+      "id": "PV-07",
+      "title": "集成到 ReAct 循环中",
+      "description": "修改 BaseAgent.run() 方法，在 ReAct 循环中集成 Plan-Verify 机制：\n\n1. ReAct 循环开始前：调 _generate_plan() 生成计划，存入 self._task_plan\n2. ReAct 循环中，当 Agent 想结束时（LLM 返回了 content 但没有 tool_calls）：调 _verify_plan(self._task_plan) 检查\n3. 如果 gaps 非空：调 _format_gaps 格式化缺口信息，追加一条 user message 到 self.messages，continue 继续循环（不 return）\n4. 如果 gaps 为空：正常退出循环\n5. verify_config 为 None 的角色跳过所有 verify 逻辑，行为和现在完全一样\n\n关键约束：\n- verify 最多触发 2 次。超过 2 次仍有 gap 则打 warning 日志强制退出，防止死循环\n- _generate_plan 和 _verify_plan 的异常全部 try/except 吞掉，打 warning 日志，不影响主流程\n- 不改变 ReAct 循环的核心逻辑（LLM 调用 → tool_calls 处理 → 结果追加），只在「Agent 想结束」的判断点插入 verify 检查",
+      "files": ["agents/base.py"],
+      "depends_on": ["PV-02", "PV-03", "PV-04", "PV-05", "PV-06"],
+      "acceptance": [
+        "verify_config 为 None 的角色行为和改动前完全一致",
+        "verify_config 存在时，Agent 想 return 前会触发 _verify_plan",
+        "有 gap 时 Agent 收到 user message 并继续循环",
+        "无 gap 时正常退出",
+        "verify 最多触发 2 次，第 3 次强制退出并打 warning",
+        "plan/verify 异常不影响主流程",
+        "日志中能看到 plan 生成条目数和 verify 结果"
+      ],
+      "status": "pending",
+      "estimated_minutes": 35
+    },
+    {
+      "id": "PV-08",
+      "title": "为文案 soul.md 添加 verify 配置",
+      "description": "在 agents/copywriter/soul.md 的 frontmatter 中添加 verify 配置：\n\n```yaml\nverify:\n  table: content\n  check_fields: [\"draft_content\", \"word_count\"]\n```\n\n同时删除 soul.md body 中的静态完成信号 checklist（如果有的话），因为 Plan-Verify 机制已经替代了它的功能。",
+      "files": ["agents/copywriter/soul.md"],
+      "depends_on": ["PV-07"],
+      "acceptance": [
+        "frontmatter 中有 verify 配置",
+        "check_fields 包含 draft_content 和 word_count",
+        "table 为 content",
+        "body 中不再有静态的完成信号 checklist（或保留为参考但标注'由引擎自动验证'）"
+      ],
+      "status": "pending",
+      "estimated_minutes": 5
+    },
+    {
+      "id": "PV-09",
+      "title": "为审核 soul.md 添加 verify 配置",
+      "description": "在 agents/reviewer/soul.md 的 frontmatter 中添加 verify 配置：\n\n```yaml\nverify:\n  table: content\n  check_fields: [\"review_status\", \"review_feedback\"]\n```\n\n审核 Agent 在结束前会被自动验证：每条有成稿的内容行是否都写回了 review_status 和 review_feedback。漏审的内容行会被检出。",
+      "files": ["agents/reviewer/soul.md"],
+      "depends_on": ["PV-07"],
+      "acceptance": [
+        "frontmatter 中有 verify 配置",
+        "check_fields 包含 review_status 和 review_feedback",
+        "table 为 content"
+      ],
+      "status": "pending",
+      "estimated_minutes": 5
+    },
+    {
+      "id": "PV-10",
+      "title": "为策略师 soul.md 添加 verify 配置",
+      "description": "在 agents/strategist/soul.md 的 frontmatter 中添加 verify 配置：\n\n```yaml\nverify:\n  table: project\n  check_fields: [\"strategy\"]\n  min_content_rows: 3\n```\n\n策略师在结束前会被自动验证：策略方案字段是否已写入 + 内容排期表是否至少有 3 行。",
+      "files": ["agents/strategist/soul.md"],
+      "depends_on": ["PV-07"],
+      "acceptance": [
+        "frontmatter 中有 verify 配置",
+        "check_fields 包含 strategy",
+        "min_content_rows 为 3",
+        "table 为 project"
+      ],
+      "status": "pending",
+      "estimated_minutes": 5
+    },
+    {
+      "id": "PV-11",
+      "title": "为客户经理 soul.md 添加 verify 配置",
+      "description": "在 agents/account_manager/soul.md 的 frontmatter 中添加 verify 配置：\n\n```yaml\nverify:\n  table: project\n  check_fields: [\"brief_analysis\"]\n```\n\n客户经理在结束前会被自动验证：Brief 解读字段是否已写入。",
+      "files": ["agents/account_manager/soul.md"],
+      "depends_on": ["PV-07"],
+      "acceptance": [
+        "frontmatter 中有 verify 配置",
+        "check_fields 包含 brief_analysis",
+        "table 为 project"
+      ],
+      "status": "pending",
+      "estimated_minutes": 5
+    },
+    {
+      "id": "PV-12",
+      "title": "为项目经理 soul.md 添加 verify 配置",
+      "description": "在 agents/project_manager/soul.md 的 frontmatter 中添加 verify 配置：\n\n```yaml\nverify:\n  table: project\n  check_fields: [\"delivery_summary\"]\n```\n\n项目经理在结束前会被自动验证：交付摘要字段是否已写入。",
+      "files": ["agents/project_manager/soul.md"],
+      "depends_on": ["PV-07"],
+      "acceptance": [
+        "frontmatter 中有 verify 配置",
+        "check_fields 包含 delivery_summary",
+        "table 为 project"
+      ],
+      "status": "pending",
+      "estimated_minutes": 5
+    },
+    {
+      "id": "PV-13",
+      "title": "单元测试：_generate_plan 和 _verify_plan",
+      "description": "新建 tests/test_plan_verify.py，测试以下场景：\n\n1. verify_config 为 None → plan 为空，verify 返回空 gaps\n2. content 模式 + 3 条内容行全部有 draft_content → gaps 为空\n3. content 模式 + 3 条内容行其中 1 条 draft_content 为空 → gaps 包含该条\n4. project 模式 + strategy 字段非空 → gaps 为空\n5. project 模式 + strategy 字段为空 → gaps 包含该字段\n6. project 模式 + min_content_rows=3 但只有 1 行 → gaps 包含行数不足\n\n可以 mock Bitable 的返回值，不需要真实飞书凭证。",
+      "files": ["tests/test_plan_verify.py"],
+      "depends_on": ["PV-04", "PV-05"],
+      "acceptance": [
+        "6 个测试用例全部通过",
+        "不依赖飞书凭证（用 mock）",
+        "测试覆盖 content 和 project 两种模式",
+        "测试覆盖 gaps 为空和非空两种情况"
+      ],
+      "status": "pending",
+      "estimated_minutes": 30
+    },
+    {
+      "id": "PV-14",
+      "title": "端到端验证：文案 Agent 漏写后自动补写",
+      "description": "跑一次完整流水线，或单独跑文案 Agent。观察 ReAct 日志：\n\n1. 文案 Agent 开始时日志中出现 plan 生成记录（如'生成计划：9 条内容待撰写'）\n2. 如果 Agent 在某轮想结束但有内容行未写入 → 日志中出现 verify gap 信息和'继续循环'记录\n3. Agent 最终退出时所有 check_fields 字段非空\n\n如果所有内容行一次性写完没触发 verify gap，可以手动制造场景：在内容排期表中新增一条空内容行，然后重跑文案 Agent，观察它是否检测到并补写。",
+      "files": [],
+      "depends_on": ["PV-08", "PV-13"],
+      "acceptance": [
+        "日志中能看到 plan 生成记录",
+        "所有内容行的 draft_content 和 word_count 最终非空",
+        "如果触发了 verify gap，日志中有具体的缺失项信息",
+        "verify 没有导致死循环（最多触发 2 次后强制退出）"
+      ],
+      "status": "pending",
+      "estimated_minutes": 30
+    }
+  ],
+  "summary": {
+    "total_tasks": 14,
+    "estimated_total_minutes": 220,
+    "execution_order": [
+      {"group": "A 基础设施", "tasks": ["PV-01"], "description": "frontmatter 解析"},
+      {"group": "B 核心实现", "tasks": ["PV-02", "PV-03", "PV-04", "PV-05", "PV-06", "PV-07"], "description": "plan + verify + 集成，串行执行"},
+      {"group": "C 角色配置", "tasks": ["PV-08", "PV-09", "PV-10", "PV-11", "PV-12"], "description": "五个 soul.md 添加 verify，可并行"},
+      {"group": "D 测试验证", "tasks": ["PV-13", "PV-14"], "description": "单元测试 + 端到端"}
+    ]
+  }
+}
