@@ -31,7 +31,7 @@ from config import (
     L0_MESSAGE_WINDOW_MAX_TOKENS, L0_MESSAGE_WINDOW_RESERVE_TOKENS,
     EXPERIENCE_POOL_ROLE_ALLOWLIST,
 )
-from memory.project import BriefProject, ProjectMemory
+from memory.project import BriefProject, ContentMemory, ProjectMemory
 from memory.experience import ExperienceManager
 from memory.working import MessageWindow
 from tools import ToolRegistry, AgentContext
@@ -140,6 +140,10 @@ _REQUIRED_TOOL_CALLS: dict[str, list[str]] = {
     # account_manager 必须产出 Brief 解读报告并写回主表；
     # post-validation 兜底确保即使 ReAct 提前退出也会补全写入
     "account_manager": ["write_project"],
+    # strategist 三件套：建内容矩阵 + 写策略 + 推进状态；
+    # 历史曾出现「光调研不建仓」「建了行没推进状态」的空跑，
+    # 导致 Orchestrator 反复重启 strategist 累积重复内容行
+    "strategist": ["batch_create_content", "write_project", "update_status"],
     # 文案走「对标 + 规则」双轨：search_reference 拿爆款套路，
     # search_knowledge 查禁用词/平台规范，二者缺一不可；
     # write_content 是成稿写回的唯一出口，缺失则本轮无任何内容落地
@@ -169,6 +173,9 @@ class SoulConfig:
     tools: list[str]
     max_iterations: int
     body: str  # Markdown 正文
+    # Plan-Verify 配置（嵌套 dict），不存在时为 None 表示该角色不启用 Plan-Verify
+    # 结构示例: {"table": "content", "check_fields": ["draft_content"], "min_content_rows": 3}
+    verify: dict | None = None
 
 
 @dataclass
@@ -183,7 +190,14 @@ class AgentResult:
 
 
 def parse_soul(text: str) -> SoulConfig:
-    """解析 soul.md：--- YAML frontmatter --- + Markdown body。"""
+    """解析 soul.md：--- YAML frontmatter --- + Markdown body。
+
+    支持四种形态：
+      - 顶层 kv: ``name: 文案``
+      - 顶层 list: ``tools:`` 后跟 ``  - read_project``
+      - 嵌套 dict（一层）: ``verify:`` 后跟 ``  table: content``
+      - inline list: ``check_fields: ["a", "b"]``
+    """
     parts = text.split("---", 2)
     if len(parts) < 3:
         raise ValueError("soul.md 格式错误：缺少 --- 分隔的 frontmatter")
@@ -191,40 +205,90 @@ def parse_soul(text: str) -> SoulConfig:
     frontmatter_raw = parts[1].strip()
     body = parts[2].strip()
 
-    # 简单的 YAML 解析（不依赖 PyYAML）
-    fm: dict[str, Any] = {}
-    current_key = ""
-    current_list: list[str] | None = None
+    def _coerce(val: str) -> Any:
+        """裸字符串转 int / inline list / 字符串。"""
+        val = val.strip()
+        if not val:
+            return None
+        # inline list: ["a", "b"] 或 [a, b]
+        if val.startswith("[") and val.endswith("]"):
+            inner = val[1:-1].strip()
+            if not inner:
+                return []
+            return [
+                item.strip().strip('"').strip("'")
+                for item in inner.split(",")
+                if item.strip()
+            ]
+        try:
+            return int(val)
+        except ValueError:
+            return val
 
-    for line in frontmatter_raw.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+    fm: dict[str, Any] = {}
+    parent_key: str = ""              # 当前顶层 key（list/dict 的父）
+    in_nested_dict: bool = False      # 父 key 当前是否已升格为 dict
+    nested_list_key: str | None = None  # 嵌套 dict 内当前 list 的 key
+
+    for raw_line in frontmatter_raw.splitlines():
+        if not raw_line.strip() or raw_line.strip().startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip())
+        stripped = raw_line.strip()
+
+        # 顶层行
+        if indent == 0:
+            in_nested_dict = False
+            nested_list_key = None
+            if ":" in stripped:
+                key, _, val = stripped.partition(":")
+                key = key.strip()
+                val = val.strip()
+                parent_key = key
+                if val:
+                    fm[key] = _coerce(val)
+                else:
+                    # 占位 None，等待子项决定 list 还是 dict
+                    fm[key] = None
+            continue
+
+        # 缩进行
+        if not parent_key:
             continue
 
         # 列表项: "  - value"
-        if stripped.startswith("- ") and current_key:
-            if current_list is None:
-                current_list = []
-            current_list.append(stripped[2:].strip())
-            fm[current_key] = current_list
+        if stripped.startswith("- "):
+            item = stripped[2:].strip().strip('"').strip("'")
+            if in_nested_dict:
+                if nested_list_key is None:
+                    continue
+                target = fm[parent_key].setdefault(nested_list_key, [])
+                if not isinstance(target, list):
+                    target = []
+                    fm[parent_key][nested_list_key] = target
+                target.append(item)
+            else:
+                cur = fm.get(parent_key)
+                if not isinstance(cur, list):
+                    cur = []
+                    fm[parent_key] = cur
+                cur.append(item)
             continue
 
-        # key: value
+        # 缩进 kv → 父 key 升格为 dict
         if ":" in stripped:
-            # 先保存之前的列表
-            current_list = None
+            if not in_nested_dict:
+                fm[parent_key] = {}
+                in_nested_dict = True
             key, _, val = stripped.partition(":")
             key = key.strip()
             val = val.strip()
-            current_key = key
+            nested_list_key = None
             if val:
-                # 尝试转数字
-                try:
-                    fm[key] = int(val)
-                except ValueError:
-                    fm[key] = val
+                fm[parent_key][key] = _coerce(val)
             else:
-                fm[key] = None
+                fm[parent_key][key] = None
+                nested_list_key = key
 
     return SoulConfig(
         name=fm.get("name", ""),
@@ -232,6 +296,7 @@ def parse_soul(text: str) -> SoulConfig:
         description=fm.get("description", ""),
         tools=fm.get("tools", []) if isinstance(fm.get("tools"), list) else [],
         max_iterations=fm.get("max_iterations", 10),
+        verify=fm.get("verify") if isinstance(fm.get("verify"), dict) else None,
         body=body,
     )
 
@@ -324,6 +389,7 @@ def load_soul_with_platform_patch(
         tools=list(base_soul.tools),
         max_iterations=base_soul.max_iterations,
         body=merged_body,
+        verify=base_soul.verify,
     )
     logger.info(
         "[%s] 平台专属 soul 合成完成 platform=%s base=%d+patch=%d chars",
@@ -532,6 +598,9 @@ class BaseAgent:
         self.soul, self._platform_patch_used = load_soul_with_platform_patch(
             role_id, platform_for_patch,
         )
+        # Plan-Verify 配置：来自 soul.md frontmatter 的 verify 字段
+        # 不存在时为 None，表示该角色不启用 Plan-Verify 机制
+        self._verify_config: dict | None = self.soul.verify
 
         # 加载共享知识（按角色分层装配）
         self.shared_knowledge = (
@@ -887,6 +956,55 @@ class BaseAgent:
         })
 
         # 5. ReAct 循环
+        # Plan-Verify: 进入循环前生成完成计划（异常静默，不阻塞主流程）
+        # verify_config 为 None 的角色：plan 为空，verify 整段跳过，行为与改动前一致
+        self._task_plan: list[dict] = []
+        self._verify_round_count: int = 0
+        if self._verify_config:
+            try:
+                self._task_plan = await self._generate_plan(context.project_name)
+                _table = (self._verify_config or {}).get("table")
+                logger.info(
+                    "[%s] Plan-Verify 计划生成 → %d 条 plan items（table=%s, check_fields=%s）",
+                    self.soul.name, len(self._task_plan), _table,
+                    (self._verify_config or {}).get("check_fields"),
+                )
+                # 详情：每条 plan item 单独一行，便于判断引擎在校验什么
+                for _i, _item in enumerate(self._task_plan, start=1):
+                    _scope = _item.get("scope", "")
+                    if _scope == "content":
+                        logger.info(
+                            "  [%s] plan #%d  scope=content  rid=%s  title=%r  platform=%r  check_fields=%s",
+                            self.soul.name, _i,
+                            _item.get("record_id", ""),
+                            (_item.get("title") or "")[:40],
+                            _item.get("platform", ""),
+                            _item.get("check_fields"),
+                        )
+                    elif _scope == "project":
+                        logger.info(
+                            "  [%s] plan #%d  scope=project  rid=%s  check_fields=%s",
+                            self.soul.name, _i,
+                            _item.get("record_id", ""),
+                            _item.get("check_fields"),
+                        )
+                    elif _scope == "content_rows_count":
+                        logger.info(
+                            "  [%s] plan #%d  scope=content_rows_count  min_count=%s",
+                            self.soul.name, _i, _item.get("min_count"),
+                        )
+                    else:
+                        logger.info(
+                            "  [%s] plan #%d  raw=%s",
+                            self.soul.name, _i, _item,
+                        )
+            except Exception as e:
+                logger.warning(
+                    "[%s] Plan-Verify 计划生成失败 err=%s（不影响主流程）",
+                    self.soul.name, e,
+                )
+                self._task_plan = []
+
         final_output = ""
         for iteration in range(1, self.soul.max_iterations + 1):
             # 每轮 LLM 调用前 trim：按 assistant+tool 组整体丢弃最早对话
@@ -1003,6 +1121,54 @@ class BaseAgent:
                         ),
                     })
                     continue
+
+                # Plan-Verify: Agent 想结束前的最后一道关
+                # verify_config 为 None 的角色会整段跳过，行为与改动前完全一致
+                # 最多触发 2 次；第 3 次仍有 gap 则打 warning 强制退出，防死循环
+                if self._verify_config:
+                    try:
+                        gaps = await self._verify_plan(
+                            self._task_plan, context.project_name,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "[%s] 第%d轮 → Plan-Verify 验证异常 err=%s（按通过处理）",
+                            self.soul.name, iteration, e,
+                        )
+                        gaps = []
+                    if gaps and self._verify_round_count < 2:
+                        self._verify_round_count += 1
+                        logger.info(
+                            "[%s] 第%d轮 → Plan-Verify 第%d次发现 %d 个缺口，注入提示后继续循环",
+                            self.soul.name, iteration,
+                            self._verify_round_count, len(gaps),
+                        )
+                        gap_text = self._format_gaps(gaps)
+                        # 把每条 gap 详情打到日志（便于人工对账）
+                        for _g in gaps:
+                            logger.info(
+                                "  [%s] gap  scope=%s  rid=%s  title=%r  field=%s  reason=%s",
+                                self.soul.name,
+                                _g.get("scope", ""), _g.get("record_id", ""),
+                                (_g.get("title") or "")[:30],
+                                _g.get("field", ""), _g.get("reason", ""),
+                            )
+                        window.append({"role": "user", "content": gap_text})
+                        continue
+                    elif gaps:
+                        logger.warning(
+                            "[%s] 第%d轮 → Plan-Verify 已触发 %d 次仍有 %d 个缺口，"
+                            "强制退出避免死循环",
+                            self.soul.name, iteration,
+                            self._verify_round_count, len(gaps),
+                        )
+                        for _g in gaps:
+                            logger.warning(
+                                "  [%s] 残留 gap  scope=%s  rid=%s  field=%s  reason=%s",
+                                self.soul.name,
+                                _g.get("scope", ""), _g.get("record_id", ""),
+                                _g.get("field", ""), _g.get("reason", ""),
+                            )
 
                 # 有文本 → 正常最终输出
                 final_output = content
@@ -1133,6 +1299,298 @@ class BaseAgent:
         })
 
         return final_output
+
+    # ─────────────────────────────────────────────────────
+    # Plan-Verify 机制：Pre-Task Plan + Post-Task Verify
+    # ─────────────────────────────────────────────────────
+
+    async def _generate_plan(self, project_name: str) -> list[dict]:
+        """根据 verify_config 生成任务完成计划。
+
+        纯代码逻辑，不调 LLM。从 Bitable 读真实数据生成 plan。
+        - verify_config 为 None → 返回空列表（角色不启用 Plan-Verify）
+        - table == 'content' → 为每条内容行生成一个 plan item
+        - table == 'project' → 由 PV-03 实现（占位，下一任务覆盖）
+
+        每个 plan item 形如：
+            {
+              "scope": "content",
+              "record_id": "rec...",
+              "title": "...",
+              "platform": "小红书",
+              "check_fields": ["draft_content", "word_count"],
+            }
+        """
+        cfg = self._verify_config
+        if not cfg:
+            return []
+
+        table = (cfg.get("table") or "").strip()
+        check_fields = list(cfg.get("check_fields") or [])
+        plan: list[dict] = []
+
+        if table == "content":
+            try:
+                cm = ContentMemory()
+                records = await cm.list_by_project(project_name)
+            except Exception as e:
+                logger.warning(
+                    "[%s] _generate_plan: 读取内容行失败 project=%s err=%s",
+                    self.role_id, project_name, e,
+                )
+                return []
+
+            for r in records:
+                plan.append({
+                    "scope": "content",
+                    "record_id": r.record_id,
+                    "title": r.title,
+                    "platform": r.platform,
+                    "check_fields": list(check_fields),
+                })
+
+        elif table == "project":
+            # 项目主表字段检查项：单条 plan 检查 verify_config.check_fields 是否非空
+            plan.append({
+                "scope": "project",
+                "record_id": self.record_id,
+                "check_fields": list(check_fields),
+            })
+            # 可选：内容排期表行数检查（策略师用，默认要求 ≥ N 行）
+            min_rows = cfg.get("min_content_rows")
+            if isinstance(min_rows, int) and min_rows > 0:
+                plan.append({
+                    "scope": "content_rows_count",
+                    "min_count": min_rows,
+                })
+
+        return plan
+
+    @staticmethod
+    def _is_empty_field(value: Any) -> bool:
+        """空字段判定：None / strip 后空串 / 数值 0 / 空集合。
+
+        匹配"字段值未填写"的业务语义：
+          - 字符串：strip() 后空串视为空
+          - 数值（int/float）：0 视为未填（如 word_count=0 表示没写字数）
+          - 集合（list/tuple/dict/set）：长度 0 视为空
+          - None：直接视为空
+        """
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return value.strip() == ""
+        if isinstance(value, bool):
+            # bool 是 int 的子类，单独处理：False 视为未填
+            return value is False
+        if isinstance(value, (int, float)):
+            return value == 0
+        if isinstance(value, (list, tuple, dict, set)):
+            return len(value) == 0
+        return False
+
+    async def _verify_plan(self, plan: list[dict], project_name: str) -> list[dict]:
+        """对照 plan 重新从 Bitable 读取最新数据，逐项验证完成情况。
+
+        纯代码逻辑，不调 LLM。每个未完成项作为一个 gap 返回。
+
+        Returns:
+            gaps 列表。空列表 = 全部完成。每个 gap 形如：
+                {
+                  "scope": "content"|"project"|"content_rows_count",
+                  "record_id": "rec...",     # content/project 域有
+                  "title": "...",             # content 域有
+                  "field": "draft",          # content/project 域有
+                  "reason": "字段为空"
+                }
+        """
+        if not self._verify_config:
+            return []
+        if not plan:
+            return []
+
+        gaps: list[dict] = []
+        cfg = self._verify_config
+        table = (cfg.get("table") or "").strip()
+        logger.info(
+            "[%s] Plan-Verify 开始校验：%d 条 plan items（table=%s, check_fields=%s）",
+            self.role_id, len(plan), table, cfg.get("check_fields"),
+        )
+
+        if table == "content":
+            # 关键：重新从 Bitable 读取最新数据，不依赖缓存或 Agent 自报
+            try:
+                cm = ContentMemory()
+                records = await cm.list_by_project(project_name)
+            except Exception as e:
+                logger.warning(
+                    "[%s] _verify_plan: 读取内容行失败 project=%s err=%s",
+                    self.role_id, project_name, e,
+                )
+                return []
+            records_by_id = {r.record_id: r for r in records}
+
+            for item in plan:
+                if item.get("scope") != "content":
+                    continue
+                rid = item.get("record_id", "")
+                title = item.get("title", "")
+                check_fields = item.get("check_fields") or []
+                r = records_by_id.get(rid)
+                if r is None:
+                    gaps.append({
+                        "scope": "content",
+                        "record_id": rid,
+                        "title": title,
+                        "field": "_record",
+                        "reason": "内容行已被删除或不存在",
+                    })
+                    continue
+                for f in check_fields:
+                    if not hasattr(r, f):
+                        gaps.append({
+                            "scope": "content",
+                            "record_id": rid,
+                            "title": title,
+                            "field": f,
+                            "reason": f"字段 {f} 在 ContentRecord 中不存在",
+                        })
+                        continue
+                    value = getattr(r, f, None)
+                    if self._is_empty_field(value):
+                        gaps.append({
+                            "scope": "content",
+                            "record_id": rid,
+                            "title": title,
+                            "field": f,
+                            "reason": "字段为空",
+                        })
+
+        elif table == "project":
+            # 重新从 Bitable 读取项目主表最新数据
+            proj = None
+            try:
+                pm = self._project_memory_factory(self.record_id)
+                proj = await pm.load()
+            except Exception as e:
+                logger.warning(
+                    "[%s] _verify_plan: 读取项目主表失败 err=%s",
+                    self.role_id, e,
+                )
+
+            for item in plan:
+                scope = item.get("scope")
+
+                if scope == "project":
+                    check_fields = item.get("check_fields") or []
+                    rid = item.get("record_id", self.record_id)
+                    if proj is None:
+                        # 项目主表读不到时所有字段都视为缺失
+                        for f in check_fields:
+                            gaps.append({
+                                "scope": "project",
+                                "record_id": rid,
+                                "field": f,
+                                "reason": "项目主表读取失败",
+                            })
+                        continue
+                    for f in check_fields:
+                        if not hasattr(proj, f):
+                            gaps.append({
+                                "scope": "project",
+                                "record_id": rid,
+                                "field": f,
+                                "reason": f"字段 {f} 在 BriefProject 中不存在",
+                            })
+                            continue
+                        value = getattr(proj, f, None)
+                        if self._is_empty_field(value):
+                            gaps.append({
+                                "scope": "project",
+                                "record_id": rid,
+                                "field": f,
+                                "reason": "字段为空",
+                            })
+
+                elif scope == "content_rows_count":
+                    min_count = int(item.get("min_count") or 0)
+                    try:
+                        cm = ContentMemory()
+                        records = await cm.list_by_project(project_name)
+                        actual = len(records)
+                    except Exception as e:
+                        logger.warning(
+                            "[%s] _verify_plan: 读取内容行失败 project=%s err=%s",
+                            self.role_id, project_name, e,
+                        )
+                        continue
+                    if actual < min_count:
+                        gaps.append({
+                            "scope": "content_rows_count",
+                            "field": "_row_count",
+                            "reason": (
+                                f"内容行数量不足：实际 {actual} 行，"
+                                f"要求至少 {min_count} 行"
+                            ),
+                        })
+
+        # 校验完成摘要：通过/失败的 plan item 颗粒度统计
+        _failed_rids = {g.get("record_id", "") for g in gaps if g.get("scope") == "content"}
+        _content_plan_count = sum(1 for it in plan if it.get("scope") == "content")
+        if table == "content":
+            _passed = _content_plan_count - len(_failed_rids)
+            logger.info(
+                "[%s] Plan-Verify 校验完成 → 通过 %d 条 / 失败 %d 条（gaps=%d）",
+                self.role_id, _passed, len(_failed_rids), len(gaps),
+            )
+        elif table == "project":
+            logger.info(
+                "[%s] Plan-Verify 校验完成 → gaps=%d（project 字段 %d 项 + 行数不足 %d 项）",
+                self.role_id, len(gaps),
+                sum(1 for g in gaps if g.get("scope") == "project"),
+                sum(1 for g in gaps if g.get("scope") == "content_rows_count"),
+            )
+        return gaps
+
+    @staticmethod
+    def _format_gaps(gaps: list[dict]) -> str:
+        """把 _verify_plan 返回的 gaps 列表渲染为人类可读文本。
+
+        用于追加到 self.messages 让 Agent 知道哪些没完成。
+        gaps 为空时返回空字符串（调用方据此判断是否需要插入消息）。
+
+        每条 gap 渲染为一行：
+          - content 域：「内容行 {record_id}「{title}」：{field} {reason}」
+          - project 域：「项目主表：{field} {reason}」
+          - content_rows_count 域：「内容排期表：{reason}」
+        末尾追加一行引导提示，要求 Agent 继续完成。
+        """
+        if not gaps:
+            return ""
+
+        lines: list[str] = ["自检发现以下未完成项："]
+        for idx, g in enumerate(gaps, start=1):
+            scope = g.get("scope", "")
+            field = g.get("field", "")
+            reason = g.get("reason", "")
+            if scope == "content":
+                rid = g.get("record_id", "")
+                title = (g.get("title") or "").strip()
+                title_part = f"「{title}」" if title else ""
+                lines.append(
+                    f"{idx}. 内容行 {rid}{title_part}：{field} {reason}"
+                )
+            elif scope == "project":
+                lines.append(f"{idx}. 项目主表：{field} {reason}")
+            elif scope == "content_rows_count":
+                lines.append(f"{idx}. 内容排期表：{reason}")
+            else:
+                # 兜底：未知 scope 也给出可读文本
+                lines.append(f"{idx}. {scope or '未知'}：{field} {reason}")
+
+        lines.append("")
+        lines.append("请继续完成以上缺失项，写入对应字段后再结束。")
+        return "\n".join(lines)
 
     def _check_required_tools(self, messages: list[dict]) -> list[str]:
         """检查 ReAct 历史中是否调用了当前角色的必需工具，且调用未以错误结束。

@@ -16,7 +16,7 @@
         "min_content_rows 是可选字段，不存在时不报错",
         "不影响现有的 name / role_id / tools / max_iterations 解析"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 15
     },
     {
@@ -33,7 +33,7 @@
         "check_fields 来自 verify_config 而不是硬编码",
         "不调 LLM"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 20
     },
     {
@@ -47,7 +47,7 @@
         "有 min_content_rows 时 plan 中包含内容行数量检查项",
         "无 min_content_rows 时不报错，只检查项目字段"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 15
     },
     {
@@ -60,12 +60,12 @@
         "_verify_plan 方法存在且为 async",
         "verify_config 为 None 时返回空列表（表示不需要验证）",
         "plan 为空时返回空列表",
-        "从 Bitable 重新读取数据（不依赖缓存或 Agent 自报）",
+        "从 Bitable 重新读取数据（不依赖缓存或 Agent 自报)",
         "字段非空 → 该项不出现在 gaps 中",
         "字段为空 → 出现在 gaps 中，包含 record_id / title / field / reason",
         "不调 LLM"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 25
     },
     {
@@ -79,7 +79,7 @@
         "内容行数不足时出现在 gaps 中，reason 包含实际数量和要求数量",
         "从 Bitable 重新读取数据"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 15
     },
     {
@@ -94,7 +94,7 @@
         "内容行的 gap 包含标题信息（如果有）",
         "末尾有一句引导 Agent 继续完成的提示"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 10
     },
     {
@@ -112,7 +112,7 @@
         "plan/verify 异常不影响主流程",
         "日志中能看到 plan 生成条目数和 verify 结果"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 35
     },
     {
@@ -127,7 +127,7 @@
         "table 为 content",
         "body 中不再有静态的完成信号 checklist（或保留为参考但标注'由引擎自动验证'）"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 5
     },
     {
@@ -141,7 +141,7 @@
         "check_fields 包含 review_status 和 review_feedback",
         "table 为 content"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 5
     },
     {
@@ -156,7 +156,7 @@
         "min_content_rows 为 3",
         "table 为 project"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 5
     },
     {
@@ -170,7 +170,7 @@
         "check_fields 包含 brief_analysis",
         "table 为 project"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 5
     },
     {
@@ -184,7 +184,7 @@
         "check_fields 包含 delivery_summary",
         "table 为 project"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 5
     },
     {
@@ -199,7 +199,7 @@
         "测试覆盖 content 和 project 两种模式",
         "测试覆盖 gaps 为空和非空两种情况"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 30
     },
     {
@@ -214,7 +214,7 @@
         "如果触发了 verify gap，日志中有具体的缺失项信息",
         "verify 没有导致死循环（最多触发 2 次后强制退出）"
       ],
-      "status": "pending",
+      "status": "done",
       "estimated_minutes": 30
     }
   ],
