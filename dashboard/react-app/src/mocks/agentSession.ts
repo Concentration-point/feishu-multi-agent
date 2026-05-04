@@ -278,13 +278,16 @@ export const MOCK_SESSION: AgentSession = {
     tagline:
       "客户希望在 5/25 - 6/1 完成一轮全渠道内容铺设，核心目标是促销窗口内的转化，兼顾品牌教育价值沉淀。",
     blocks: [
-      { label: "Client", value: "CDSS" },
-      { label: "Campaign", value: "电商大促 · 六一节点" },
-      { label: "Budget", value: "待客户补充" },
-      { label: "Timeline", value: "5/25 - 6/1" },
-      { label: "Target Audience", value: "28-40 岁家长，追求孩子陪伴与能力成长" },
-      { label: "Brand Tone", value: "专业而亲切，拒绝强推，场景 + 证据建立信任" },
+      { label: "Summary", value: "六一节点全渠道内容铺设，5/25-6/1 共 7 天，3 渠道 4 篇文。" },
+      { label: "Target", value: "促销窗口内的转化为主要目标，兼顾品牌教育价值沉淀。" },
+      { label: "Audience", value: "28-40 岁家长，追求孩子陪伴与能力成长。" },
+      { label: "Constraints", value: "预算待客户补充；母婴功效词需合规审查；交付时间 5/25-6/1。" },
     ],
+    gate: {
+      verdict: "conditional",
+      label: "有条件通过",
+      body: "**有条件通过**：核心需求与时间线明确，可进入策略阶段。\n\n**待补充**：\n- 预算上限（影响渠道分配）\n- 品牌方关于功效词的禁用清单\n\n**风险提示**：母婴品类涉及医疗健康类红线词，文案撰写需走合规自检。",
+    },
   },
 
   // ============ 策略师 ============

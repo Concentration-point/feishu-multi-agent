@@ -184,6 +184,18 @@ export interface StageSectionHeader {
   meta: StageHeaderMeta[];
 }
 
+/** 准入结论 verdict 类型，用于 Gate banner 视觉分级 */
+export type GateVerdict = "pass" | "conditional" | "reject" | "review";
+
+/** 客户经理 Gate 准入结论 */
+export interface GateInfo {
+  verdict: GateVerdict;
+  /** 徽章短文：通过 / 有条件通过 / 不通过 / 待审 */
+  label: string;
+  /** 完整准入结论 markdown body（不裁剪） */
+  body: string;
+}
+
 /** 客户经理角色的一等公民 */
 export interface BriefCard {
   header: StageSectionHeader;
@@ -191,6 +203,8 @@ export interface BriefCard {
   title: string;
   tagline: string;
   blocks: PlanBlock[];
+  /** 准入结论：作为整行 banner 单独渲染；为空则不渲染 */
+  gate?: GateInfo;
 }
 
 /** 策略师角色的一等公民 */

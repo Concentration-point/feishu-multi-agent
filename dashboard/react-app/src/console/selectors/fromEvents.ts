@@ -21,6 +21,8 @@ import type {
   ExperienceCard,
   ExperienceEvolution,
   ExperiencePhase,
+  GateInfo,
+  GateVerdict,
   Milestone,
   NegotiationEntry,
   PlanBlock,
@@ -198,17 +200,41 @@ function extractFirstParagraph(text: string): string {
   return "";
 }
 
+/**
+ * 按 markdown heading 抽节内容。
+ * 支持 ##/###/#### 等任意级别（`#+`），可选编号前缀（如 "8. "），
+ * 节体在下一个 `#+` heading 或 EOF 处终止——避免遇到非同级 heading 时贪婪到 EOF。
+ */
 function parseMarkdownBlocks(md: string, sectionNames: string[]): Record<string, string> {
   const out: Record<string, string> = {};
   if (!md) return out;
   for (const name of sectionNames) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const re = new RegExp(
-      `##\\s*(?:\\d+\\.?\\s*)?${name.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s*\\n([\\s\\S]*?)(?=\\n##\\s|$)`,
+      `(?:^|\\n)#+[ \\t]*(?:\\d+[ \\t]*\\.?[ \\t]*)?${escaped}[^\\n]*\\n([\\s\\S]*?)(?=\\n#+[ \\t]+|$)`,
     );
     const m = md.match(re);
     if (m) out[name] = m[1].trim();
   }
   return out;
+}
+
+/**
+ * 在某个"分隔节标题"处把 markdown 切成 (before, after, headLineEnd)。
+ * 用于 brief_analysis 在"准入结论"处硬切左右两段。
+ *   - splitName: 节标题文本（不含编号/井号），如 "准入结论"
+ *   - 返回 null 表示没找到该节
+ */
+function sliceAtSection(md: string, splitName: string): { before: string; after: string } | null {
+  const escaped = splitName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(
+    `(?:^|\\n)#+[ \\t]*(?:\\d+[ \\t]*\\.?[ \\t]*)?${escaped}[^\\n]*\\n?`,
+  );
+  const m = re.exec(md);
+  if (!m || m.index === undefined) return null;
+  const before = md.slice(0, m.index).replace(/\s+$/, "");
+  const after = md.slice(m.index + m[0].length);
+  return { before, after };
 }
 
 // =============== 事件聚合 ===============
@@ -912,25 +938,88 @@ function buildToolCalls(snap: EventSnapshot): ToolCall[] {
   return out;
 }
 
+/**
+ * 从 "准入结论" 文本前 80 字解析 verdict：
+ *   - 不通过 / 拒绝 / 驳回 → reject
+ *   - 有条件 / 条件通过 / 待补充 / 待修改 / 待人审 → conditional
+ *   - 通过（不带 不/未）→ pass
+ *   - 其它 → review
+ */
+function parseGateVerdict(body: string): { verdict: GateVerdict; label: string } {
+  const head = body.slice(0, 80);
+  if (/不通过|拒绝|驳回|REJECT/i.test(head)) {
+    return { verdict: "reject", label: "不通过" };
+  }
+  if (/有条件|条件通过|待补充|待修改|待人审|CONDITIONAL/i.test(head)) {
+    return { verdict: "conditional", label: "有条件通过" };
+  }
+  if (/(?<![不未])通过|PASS/.test(head)) {
+    return { verdict: "pass", label: "通过" };
+  }
+  return { verdict: "review", label: "待审" };
+}
+
+/**
+ * 已知节名 → PlanGrid 卡片标签（保持视觉一致，未识别节名直接用中文原标题）。
+ * 与 agents/account_manager/soul.md 模板对齐，可容错节名变体。
+ */
+const SECTION_LABEL_MAP: Record<string, string> = {
+  品牌调研: "Brand Research",
+  项目摘要: "Summary",
+  目标与受众: "Target & Audience",
+  目标理解: "Target",
+  受众与场景理解: "Audience",
+  关键约束: "Constraints",
+  关键信息与约束: "Constraints",
+  运营与转化承接: "Conversion",
+  合规与风险: "Compliance",
+  信息获取记录: "Sources",
+  已确认信息: "Confirmed",
+  缺失信息: "Missing",
+};
+
+/**
+ * 动态把 brief markdown 拆成所有 `#+ N. 标题` 章节，按出现顺序返回。
+ * 不依赖固定节名清单——agent 偶发增删节也能跟得上。
+ */
+function extractAllSections(md: string): { title: string; body: string }[] {
+  const out: { title: string; body: string }[] = [];
+  const re = /(?:^|\n)#+[ \t]*(?:\d+[ \t]*\.?[ \t]*)?([^\n#][^\n]*?)[ \t]*\n([\s\S]*?)(?=\n#+[ \t]+|$)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(md)) !== null) {
+    const title = m[1].trim();
+    const body = m[2].trim();
+    if (title && body) out.push({ title, body });
+  }
+  return out;
+}
+
 function buildAccountDeck(snap: EventSnapshot): BriefCard {
   const ba = snap.writtenFields.get("brief_analysis") ?? "";
-  const secs = parseMarkdownBlocks(ba, [
-    "项目摘要",
-    "目标理解",
-    "受众与场景理解",
-    "关键信息与约束",
-    "准入结论",
-  ]);
 
-  const blocks: PlanBlock[] = [
-    { label: "Client", value: snap.client || "—" },
-    { label: "Campaign", value: snap.projectType || "—" },
-    { label: "Brief", value: clamp(snap.brief || "—", 160) },
-    { label: "Status", value: snap.projectStatus || "—" },
-  ];
-  if (secs["目标理解"]) blocks.push({ label: "Target", value: secs["目标理解"] });
-  if (secs["受众与场景理解"]) blocks.push({ label: "Audience", value: secs["受众与场景理解"] });
-  if (secs["准入结论"]) blocks.push({ label: "Gate", value: secs["准入结论"] });
+  // 顶层逻辑：brief_analysis 模板固定以 "准入结论" 收尾、之后可选 "修订说明"
+  // 在 "准入结论" 处硬切：左给 PlanGrid（解读章节），右给 GateBanner
+  // "修订说明" 整段丢弃（"本轮无" 占位无展示价值；有反馈时该信息也只对内部审计有意义）
+  const gateSplit = sliceAtSection(ba, "准入结论");
+  const briefBody = gateSplit ? gateSplit.before : ba;
+  let gateBody = gateSplit ? gateSplit.after : "";
+  if (gateBody) {
+    const reviseSplit = sliceAtSection(gateBody, "修订说明");
+    if (reviseSplit) gateBody = reviseSplit.before;
+    gateBody = gateBody.trim();
+  }
+
+  // 左侧动态抽全部章节，未识别节名兜底用原文标题
+  const blocks: PlanBlock[] = extractAllSections(briefBody).map(({ title, body }) => ({
+    label: SECTION_LABEL_MAP[title] ?? title,
+    value: body,
+  }));
+
+  let gate: GateInfo | undefined;
+  if (gateBody) {
+    const { verdict, label } = parseGateVerdict(gateBody);
+    gate = { verdict, label, body: gateBody };
+  }
 
   const toolCount = Array.from(snap.toolCallsByKey.values())
     .filter((a) => a.role === "account")
@@ -946,6 +1035,7 @@ function buildAccountDeck(snap: EventSnapshot): BriefCard {
     title: snap.projectType || "—",
     tagline: clamp(snap.brief || "—", 260),
     blocks,
+    gate,
   };
 }
 
