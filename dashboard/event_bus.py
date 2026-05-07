@@ -108,6 +108,49 @@ class EventBus:
             if queue in self._global_queues:
                 self._global_queues.remove(queue)
 
+    async def subscribe_all_with_heartbeat(
+        self, *, interval: float = 15.0
+    ) -> AsyncIterator[dict | None]:
+        """全局订阅（带心跳）。None 表示心跳信号，调用方可转换为 SSE comment。
+
+        interval 秒内无事件则 yield None，防止 Vite proxy / nginx 因静默断连。
+        """
+        queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+        self._global_queues.append(queue)
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=interval)
+                    if event is None:
+                        break
+                    yield event
+                except asyncio.TimeoutError:
+                    yield None  # 心跳信号
+        finally:
+            if queue in self._global_queues:
+                self._global_queues.remove(queue)
+
+    async def subscribe_with_heartbeat(
+        self, record_id: str, *, interval: float = 15.0
+    ) -> AsyncIterator[dict | None]:
+        """项目级订阅（带心跳）。None 表示心跳信号。"""
+        queue: asyncio.Queue = asyncio.Queue(maxsize=256)
+        if record_id not in self._queues:
+            self._queues[record_id] = []
+        self._queues[record_id].append(queue)
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=interval)
+                    if event is None:
+                        break
+                    yield event
+                except asyncio.TimeoutError:
+                    yield None  # 心跳信号
+        finally:
+            if queue in self._queues.get(record_id, []):
+                self._queues[record_id].remove(queue)
+
     def get_history(self, record_id: str) -> list[dict]:
         """返回内存中的事件历史。"""
         return list(self._history.get(record_id, []))

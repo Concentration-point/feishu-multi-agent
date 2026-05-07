@@ -37,6 +37,30 @@ export default function App() {
     setShowPicker(true);
   }, [store]);
 
+  // SSE 兜底轮询：触发 pipeline 后若 SSE 3s 内无事件，主动拉历史补偿。
+  // 解决 SSE 在代理/重启后连接断点导致事件丢失的竞态问题。
+  const startSseFallbackPoll = useCallback(
+    (recordId: string) => {
+      const poll = async (attempt: number) => {
+        if (attempt > 12) return; // 最多轮询 36s，不超过 WaitingOverlay 超时
+        const st = usePipelineStore.getState();
+        // 已收到事件（SSE 正常）或 record 已切换 → 停止
+        if (st.recordId !== recordId || st.events.length > 0) return;
+        try {
+          const r = await fetch(`/api/runs/${recordId}`);
+          const d = await r.json();
+          if (d.has_run && Array.isArray(d.events) && d.events.length > 0) {
+            for (const ev of d.events as PipelineEvent[]) processEvent(ev);
+            return; // 历史回放成功，停止轮询
+          }
+        } catch { /* 网络抖动，下次再试 */ }
+        setTimeout(() => poll(attempt + 1), 3000);
+      };
+      setTimeout(() => poll(0), 3000); // 首次检查在 3s 后
+    },
+    [processEvent],
+  );
+
   const handleSelectRecord = useCallback(
     (recordId: string, clientName: string) => {
       setShowPicker(false);
@@ -68,13 +92,16 @@ export default function App() {
             } catch {
               /* 历史拉取失败不影响实时流，下游照常依赖 SSE */
             }
+          } else {
+            // 新触发的 pipeline：启动 SSE 补偿轮询，防止 SSE 断连导致事件丢失
+            startSseFallbackPoll(recordId);
           }
         })
         .catch(() => {
           store.setConnection("error", "触发失败");
         });
     },
-    [store, processEvent],
+    [store, processEvent, startSseFallbackPoll],
   );
 
   const handleReplay = useCallback(

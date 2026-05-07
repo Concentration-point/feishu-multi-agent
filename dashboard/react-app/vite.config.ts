@@ -12,7 +12,13 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": "http://localhost:8000",
-      "/stream": "http://localhost:8000",
+      // SSE 需要对象格式，禁用代理超时，防止 http-proxy 因静默断连关闭长连接
+      "/stream": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+        timeout: 0,
+        proxyTimeout: 0,
+      },
     },
   },
 });

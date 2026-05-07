@@ -1416,12 +1416,23 @@ function buildExperienceEvolution(snap: EventSnapshot): ExperienceEvolution {
 
 /**
  * 判断事件流是否足以构成一个有效 session。
- * 至少要有 pipeline.started，否则前端认为没 live 数据，回退到 mock。
+ *
+ * 原先只认 pipeline.started，但 SSE 建连晚于 pipeline.started 发布时（典型场景：
+ * 流水线已在运行，用户才打开 Dashboard），前端会永远看到 mock session。
+ * 现在扩展为：只要有任何 agent/pipeline 级别的真实事件，就视为 live。
  */
 export function hasLiveSession(events: PipelineEvent[]): boolean {
-  return events.some(
-    (e) => e.event_type === "pipeline.started" || e.event_type === "pipeline.failed",
-  );
+  const LIVE_SIGNALS = new Set([
+    "pipeline.started",
+    "pipeline.failed",
+    "pipeline.stage_changed",
+    "pipeline.completed",
+    "pipeline.aborted",
+    "agent.started",
+    "agent.completed",
+    "tool.called",
+  ]);
+  return events.some((e) => LIVE_SIGNALS.has(e.event_type));
 }
 
 export function projectAgentSession(events: PipelineEvent[]): AgentSession {
