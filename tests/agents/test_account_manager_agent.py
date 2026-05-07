@@ -19,7 +19,10 @@ async def test_account_manager_soul_runs_with_explicit_input_context_strategy(
             "验证工具上下文 record_id/project_name/role_id 和最终 AgentResult",
         ],
     )
-    registry = FakeToolRegistry({"search_knowledge": "matched prior brief rule"})
+    registry = FakeToolRegistry({
+        "search_knowledge": "matched prior brief rule",
+        "write_project": "Brief 解读已写回主表",
+    })
     agent = make_agent("account_manager", registry=registry)
     llm = scripted_llm(
         agent,
@@ -31,6 +34,18 @@ async def test_account_manager_soul_runs_with_explicit_input_context_strategy(
                         tool_call(
                             "search_knowledge",
                             {"keywords": ["brief", "launch"]},
+                        )
+                    ],
+                )
+            ),
+            fake_response(
+                FakeMessage(
+                    content="writing brief analysis back",
+                    tool_calls=[
+                        tool_call(
+                            "write_project",
+                            {"Brief解读": "Launch campaign analysis"},
+                            "call_wp",
                         )
                     ],
                 )
@@ -50,15 +65,7 @@ async def test_account_manager_soul_runs_with_explicit_input_context_strategy(
     assert result.meta["mode"] == "unit"
     assert result.meta["project_name"] == "Launch Client"
     assert result.missing_required_tools == []
-    assert registry.calls == [
-        {
-            "tool_name": "search_knowledge",
-            "params": {"keywords": ["brief", "launch"]},
-            "record_id": "rec_am",
-            "project_name": "Launch Client",
-            "role_id": "account_manager",
-        }
-    ]
+    assert [c["tool_name"] for c in registry.calls] == ["search_knowledge", "write_project"]
     first_messages = llm["calls"][0]["messages"]
     assert "deliverable" in first_messages[0]["content"]
     assert "Client wants a product launch campaign." in first_messages[1]["content"]
@@ -77,7 +84,10 @@ async def test_account_manager_can_call_ask_human_for_blocking_info(
             "验证 ask_human 工具被真实调度，且 question / choices 参数完整透传",
         ],
     )
-    registry = FakeToolRegistry({"ask_human": "人类已选择：预算 3000-8000 / 先做小红书和大众点评"})
+    registry = FakeToolRegistry({
+        "ask_human": "人类已选择：预算 3000-8000 / 先做小红书和大众点评",
+        "write_project": "Brief 解读已写回主表",
+    })
     agent = make_agent("account_manager", registry=registry)
     scripted_llm(
         agent,
@@ -102,6 +112,18 @@ async def test_account_manager_can_call_ask_human_for_blocking_info(
                     ],
                 )
             ),
+            fake_response(
+                FakeMessage(
+                    content="写回 Brief 解读",
+                    tool_calls=[
+                        tool_call(
+                            "write_project",
+                            {"Brief解读": "烧烤店夜宵引流方案"},
+                            "call_wp",
+                        )
+                    ],
+                )
+            ),
             fake_response(FakeMessage(content="Brief analysis ready with confirmed budget and platform.")),
         ],
     )
@@ -117,7 +139,7 @@ async def test_account_manager_can_call_ask_human_for_blocking_info(
     assert result.meta["mode"] == "unit"
     assert result.meta["project_name"] == "BBQ AskHuman"
     assert result.missing_required_tools == []
-    assert [call["tool_name"] for call in registry.calls] == ["ask_human"]
+    assert [call["tool_name"] for call in registry.calls] == ["ask_human", "write_project"]
     assert registry.calls[0]["params"]["title"] == "需要确认缺失信息"
     assert "缺少预算和重点平台" in registry.calls[0]["params"]["question"]
     assert len(registry.calls[0]["params"]["choices"]) == 3
