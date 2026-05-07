@@ -10,7 +10,7 @@
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-Webhook-009688?style=flat-square&logo=fastapi&logoColor=white">
   <img alt="React"   src="https://img.shields.io/badge/React_19-Vite_8-61dafb?style=flat-square&logo=react&logoColor=white">
   <img alt="Feishu"  src="https://img.shields.io/badge/飞书-Bitable_·_IM_·_Wiki-3370ff?style=flat-square">
-  <img alt="Tests"   src="https://img.shields.io/badge/Tests-100_passed-brightgreen?style=flat-square">
+  <img alt="Tests"   src="https://img.shields.io/badge/Tests-45files·90%2B-brightgreen?style=flat-square">
 </p>
 
 </div>
@@ -27,12 +27,12 @@
 
 ---
 
-## � 解决什么问题
+## 🎯 解决什么问题
 
 | 传统方式 | 智组织方案 | AI 关键作用 |
 |---------|----------|-----------|
 | 一个营销项目需 5+ 人协作，沟通成本高 | 6 个 AI Agent 自动协作，一行 Brief 触发全流程 | 角色化分工 + 状态驱动编排 |
-| Brief→策略→文案→审核→交付，人工串行 5-10 天 | AI 全链路并行执行，分钟级完成 | ReAct 推理 + 工具调用 |
+| Brief→策略→文案→审核→交付，人工串行 5-10 天 | AI 全链路执行，分钟级完成 | ReAct 推理 + 工具调用 |
 | 经验留在个人脑中，人员流动即失 | 自动蒸馏→打分→去重→沉淀，越跑越聪明 | 经验 Hook + 置信度评估 + 双写 |
 | 内容质量依赖人工审核，标准不统一 | 五维结构化审核 + 红线一票否决 + 自动返工 | 规则检索 + 合规判定 |
 | 交付物散落在聊天/文档中 | 自动生成飞书交付文档（含图表、排期表） | 文档结构化生成 + 图表渲染 |
@@ -42,7 +42,7 @@
 
 ---
 
-## �🎭 六大 Agent 角色
+## 🎭 六大 Agent 角色
 
 ```
 ┌───────────────────── 项目流水线（Orchestrator 状态驱动编排）─────────────────────┐
@@ -82,7 +82,7 @@ flowchart TD
     G1 -->|驳回 + 反馈| F1
 
     F2["🧠 策略师<br/>联网调研 + 内容矩阵"]
-    F2 --> F3["✍️ 文案<br/>逐平台成稿 · 可并行 fanout"]
+    F2 --> F3["✍️ 文案<br/>逐平台成稿 · fanout 并行"]
     F3 --> F4["🔍 审核<br/>通过率 + 红线判定"]
     F4 -->|不达标 · 最多返工2次| F3
     F4 -->|命中红线| X["⛔ 中止并标记风险"]
@@ -90,13 +90,13 @@ flowchart TD
 
     F5 --> H["🧬 经验蒸馏<br/>置信度评分 → Bitable + Wiki 双写"]
 
-    E ~~~ T["🔧 19 个工具"]
+    E ~~~ T["🔧 21 个工具"]
     T --- B1["Feishu Bitable"]
     T --- B2["Feishu IM"]
     T --- B3["本地知识库"]
     T --- B4["经验池 L2"]
 
-    B3 <-->|上行 07-10 / 下行 01-06| W["☁️ 飞书知识空间"]
+    B3 <-->|上行 03_经验沉淀 / 下行 01/02/04/05| W["☁️ 飞书知识空间"]
 ```
 
 ---
@@ -110,15 +110,16 @@ flowchart TD
 | **结构化审核** | 通过率 / 红线 / 状态 / 总评四字段 | `agents/reviewer/soul.md` |
 | **人审门禁** | 飞书卡片审批，超时可默认同意 | `orchestrator.py:_enter_human_review_gate` |
 | **审核返工循环** | 不达标自动回退文案，最多 2 次 | `orchestrator.py:_handle_reviewer_retries` |
-| **文案并行 fanout** | 按平台并行生成，信号量控制并发 | `orchestrator.py:_run_copywriter_fan_out` |
-| **平台专属补丁** | copywriter 按目标平台动态注入 soul 补丁 | `agents/copywriter/platforms/` |
+| **文案并行 fanout** | 按平台并行生成，信号量控制并发 | `orchestrator.py:_run_copywriter_fanout` |
 | **文案双轨工作流** | 爆款对标 + 合规自检 | `tools/search_reference.py` |
 | **策略师联网调研** | Tavily 搜索 + trafilatura 网页抓取 | `tools/search_web.py`, `tools/web_fetch.py` |
 | **三层记忆系统** | L0 工作记忆 + L1 项目记忆 + L2 经验池 | `memory/` |
-| **经验蒸馏 + 溯源** | Hook 自省产出经验，携带完整溯源链 | `memory/experience.py` |
-| **知识分层治理** | 11 层目录 + 双向白名单同步 | `knowledge/`, `sync/` |
-| **经验升格审批** | 11→10 必须过飞书审批表 | `scripts/submit_inbox_to_review.py` |
+| **经验蒸馏 + 溯源** | Hook 自省产出经验，置信度 ≥ 0.75 方可沉淀 | `memory/experience.py` |
+| **知识分层治理** | 6 层目录 + 双向白名单同步 | `knowledge/`, `sync/` |
+| **经验升格审批** | 06→03 必须过飞书审批表 | `scripts/submit_inbox_to_review.py` |
 | **跨项目数据分析** | 数据分析师自动生成运营报告 | `tools/query_project_stats.py`, `tools/send_report.py` |
+| **Agent 协商机制** | 上下游角色结构化协商，广播到飞书 + Dashboard | `tools/negotiate.py` |
+| **Plan-Verify 自检** | Agent 完成前自动验证关键字段产出 | `agents/base.py:_verify_plan` |
 | **实时 Dashboard** | SSE 事件流 + React 实时面板 | `dashboard/` |
 | **经验进化可视化** | 漏斗摘要 + 卡片详情 + 置信度进度条 | `ExperienceEvolution.tsx` |
 
@@ -131,44 +132,46 @@ feishu-multi-agent/
 │
 ├── agents/                          # 🎭 角色定义
 │   ├── _shared/                     #    公司级共享知识
-│   ├── account_manager/soul.md      #    客户经理
-│   ├── strategist/soul.md           #    策略师
-│   ├── copywriter/                  #    文案
-│   │   ├── soul.md
-│   │   └── platforms/               #    平台专属补丁（公众号/小红书/抖音）
-│   ├── reviewer/soul.md             #    审核
-│   ├── project_manager/soul.md      #    项目经理
-│   ├── data_analyst/soul.md         #    数据分析师
+│   ├── account_manager/soul.md      #    客户经理（max_iterations=18）
+│   ├── strategist/soul.md           #    策略师（max_iterations=14）
+│   ├── copywriter/soul.md           #    文案（max_iterations=14）
+│   ├── reviewer/soul.md             #    审核（max_iterations=14）
+│   ├── project_manager/soul.md      #    项目经理（max_iterations=12）
+│   ├── data_analyst/soul.md         #    数据分析师（max_iterations=5）
 │   ├── contracts/                   #    角色间协作契约（JSON Schema）
 │   └── base.py                      #    唯一 Agent 引擎（ReAct + function calling）
 │
-├── tools/                           # 🔧 19 个工具（Agent 可调）
+├── tools/                           # 🔧 21 个 Agent 可调工具
 │   ├── read_project.py              #    项目主表读取
 │   ├── write_project.py             #    项目主表写入
 │   ├── search_web.py                #    联网搜索（Tavily）
+│   ├── negotiate.py                 #    Agent 间结构化协商
 │   ├── query_project_stats.py       #    跨项目统计
 │   └── ...                          #    更多工具见 tools/__init__.py
 │
 ├── memory/                          # 🧠 三层记忆
 │   ├── working.py                   #    L0 工作记忆（token 窗口管理）
 │   ├── project.py                   #    L1 项目记忆（Bitable 行映射）
-│   └── experience.py                #    L2 经验池（Bitable + Wiki 双写）
+│   └── experience.py                #    L2 经验池（置信度 ≥ 0.75 双写）
 │
 ├── feishu/                          # 📡 飞书 API 封装（直调 OpenAPI，不用 SDK）
 │   ├── auth.py                      #    TokenManager 单例
 │   ├── bitable.py                   #    多维表 CRUD（全局并发闸门）
 │   ├── im.py                        #    消息 + 人审卡片
-│   └── wiki.py                      #    知识空间节点读写
+│   ├── wiki.py                      #    知识空间节点读写
+│   └── delivery_charts.py           #    交付图表渲染
 │
-├── knowledge/                       # 📚 本地知识库（11 层 + references）
+├── knowledge/                       # 📚 本地知识库（6 层 + references）
 ├── sync/                            # 🔄 飞书知识空间双向同步
+│   ├── wiki_sync.py                 #    上行：默认仅 03_经验沉淀
+│   └── wiki_download.py             #    下行：01/02/04/05 人类层
 ├── dashboard/                       # 📊 实时 Dashboard（React 19 + SSE）
 │   ├── event_bus.py                 #    SSE 事件总线
 │   ├── react-app/                   #    前端源码
 │   └── static/                      #    构建产物（FastAPI 挂载）
 │
-├── scripts/                         # 🛠️ 运维脚本
-├── tests/                           # 🧪 100 测试用例
+├── scripts/                         # 🛠️ 运维脚本（22 个）
+├── tests/                           # 🧪 45 个测试文件 · 90+ 用例
 ├── docs/                            # 📄 架构文档 + 验收标准
 ├── demo/                            # 🎬 Demo 脚本 + 样例 Brief
 │
@@ -186,7 +189,7 @@ feishu-multi-agent/
 |:---:|:---|:---|:---|
 | **L0** | `memory/working.py` | 单次会话 | prompt + messages + 工具上下文，按 token 整组裁剪，任务结束销毁 |
 | **L1** | Bitable 项目主表 + 内容表 | 单项目 | 多角色共享事实源，通过读写同一行记录协作 |
-| **L2** | Bitable 经验池表 + 本地 Wiki | 跨项目持久 | Hook 蒸馏 → 置信度评分 → Bitable + Wiki 双写，溯源到 project/run/stage |
+| **L2** | Bitable 经验池表 + 本地 Wiki | 跨项目持久 | Hook 蒸馏 → 置信度评分（≥ 0.75）→ Bitable + Wiki 双写，溯源到 project/run/stage |
 
 ---
 
@@ -194,21 +197,27 @@ feishu-multi-agent/
 
 ```text
 knowledge/
-├── 01_企业底座/           ┐
-├── 02_服务方法论/         │  人类维护层
-├── 03_行业知识/           │  源真值在飞书
-├── 04_平台打法/           │  ⬇️ 只下行（wiki_download）
-├── 05_标准模板/           │
-├── 06_客户档案/           ┘
-├── 07_项目档案/           ┐
-├── 08_项目执行记录/       │  Agent 产出层
-├── 09_项目复盘/           │  源真值在本地
-├── 10_经验沉淀/           ┘  ⬆️ 只上行（wiki_sync 白名单）
-├── 11_待整理收件箱/       ← Agent 脏缓冲，不出站，升格需过审
-└── references/            ← 爆款对标库，仅本地使用
+├── 01_审核库/             ← 广告法禁用词、小红书/抖音平台规则（人工维护）
+├── 02_客户档案/           ← 客户信息（人工维护，私密，不推飞书）
+├── 03_经验沉淀/           ← 正式经验区，升格审批后写入 ⬆️ 上行同步（wiki_sync）
+│   ├── 电商大促/
+│   └── 新品发布/
+├── 04_服务方法论/         ← 品牌调性、审核规则、质量红线、事实核查（人工维护）
+├── 05_平台打法/           ← 小红书 / 抖音平台打法（人工维护）⬇️ 下行（wiki_download）
+│   ├── 抖音/
+│   └── 小红书/
+├── 06_待整理收件箱/       ← Agent 脏缓冲，不出站，升格需过审（06→03）
+│   ├── 电商大促/
+│   ├── 品牌传播/
+│   ├── 日常运营/
+│   └── 新品发布/
+└── references/            ← 爆款对标库，仅 search_reference 使用，不出站
+    ├── 抖音/
+    ├── 公众号/
+    └── 小红书/
 ```
 
-**核心约束**：01–06 不被 Agent 覆盖 · 07–10 不被人覆盖 · 11→10 必须通过飞书「升格审批表」
+**核心约束**：01/02/04/05 Agent 只读，不可覆盖 · 03 必须通过飞书「升格审批表」从 06 迁入 · 06 只有 Agent 写入，不推飞书
 
 详细设计 → [`docs/knowledge-architecture.md`](docs/knowledge-architecture.md)
 
@@ -234,7 +243,16 @@ knowledge/
 | `pass_rate < 阈值` | 🔄 回退文案返工（最多 2 次） |
 | 达到重试上限仍未通过 | ❌ 状态置「已驳回」 |
 
-阈值按项目类型细分：母婴 0.8 / 医疗健康 0.9，见 `config.py:REVIEW_THRESHOLDS_BY_PROJECT_TYPE`。
+阈值按项目类型细分（`config.py:REVIEW_THRESHOLDS_BY_PROJECT_TYPE`）：
+
+| 项目类型 | 通过率阈值 |
+|:---|:---:|
+| 电商大促 | 0.6 |
+| 日常运营 | 0.6 |
+| 新品发布 | 0.7 |
+| 品牌传播 | 0.7 |
+| 母婴 | 0.8 |
+| 医疗健康 | 0.9 |
 
 ### 人审门禁（客户经理 → 策略师之间）
 
@@ -280,6 +298,7 @@ WIKI_SPACE_ID=xxx                  # 启用知识空间同步
 TAVILY_API_KEY=tvly-xxx            # 启用策略师联网调研
 WEBHOOK_VERIFICATION_TOKEN=xxx     # 飞书事件订阅校验
 AUTO_APPROVE_HUMAN_REVIEW=false    # Demo 快跑模式设 true
+EXPERIENCE_CONFIDENCE_THRESHOLD=0.75  # L2 经验沉淀置信度阈值
 ```
 
 ### 3️⃣ 初始化知识库（首次）
@@ -321,7 +340,7 @@ python main.py report --type decision       # 决策建议
 ### 7️⃣ 知识同步
 
 ```bash
-python main.py sync --direction up          # 本地 07-10 → 飞书
+python main.py sync --direction up          # 本地 10_经验沉淀 → 飞书
 python main.py sync --direction down        # 飞书 01-06 → 本地
 python main.py sync --direction both
 ```
@@ -340,6 +359,8 @@ python main.py sync --direction both
 | `apply_approved_promotions.py` | 应用通过的升格审批，移入 10 对应分类 |
 | `dedupe_wiki.py` | 知识库去重合并 |
 | `check_demo_ready.py` | 检查 Demo 环境就绪度 |
+| `selfcheck_orchestrator_red_flag.py` | 红线拦截链路诊断 |
+| `run_diagnostic.py` | 全链路诊断（自动设 AUTO_APPROVE=true） |
 
 ---
 
@@ -352,7 +373,7 @@ python main.py sync --direction both
 | **Web 框架** | FastAPI + uvicorn |
 | **HTTP 客户端** | httpx |
 | **网页抓取** | trafilatura |
-| **测试** | pytest + pytest-asyncio（100 测试用例） |
+| **测试** | pytest + pytest-asyncio（45 个测试文件，90+ 用例） |
 | **前端** | React 19 + TypeScript + Vite 8 + Tailwind 4 + Zustand + framer-motion |
 | **飞书集成** | 直调 OpenAPI（不依赖官方 SDK） |
 | **Agent 引擎** | **自研 ReAct 循环 + function calling**（不依赖任何 Agent 框架） |
@@ -363,11 +384,11 @@ python main.py sync --direction both
 ## 🎯 关键设计原则
 
 - **配置驱动，零代码扩展** — 新增角色 = 新建 `soul.md`，声明工具白名单即可
-- **飞书即事实源** — Bitable 行记录是共享黑板，多角色读写同一行协作，无内部 RPC
+- **飞书即事实源** — Bitable 行记录是共享黑板，多角色读写同一行记录协作，无内部 RPC
 - **本地优先 + 后台同步** — Agent 检索走本地 grep（毫秒级），后台异步推送飞书知识空间
-- **单向同步 + 白名单** — 人类层与 Agent 层严格隔离，升格必须过审
+- **单向同步 + 白名单** — 人类层（01-06）与 Agent 层（07-10）严格隔离，升格必须过审
 - **经验可溯源** — 每条 L2 经验携带 `project_id / run_id / stage / review_status`
-- **状态驱动路由** — 从任意中间状态恢复，路由表可配置，防死循环
+- **状态驱动路由** — 从任意中间状态恢复，路由表可配置，max_route_steps=15 防死循环
 
 ---
 
@@ -377,7 +398,7 @@ python main.py sync --direction both
 |:---:|:---|:---|
 | 1 | `README.md` | 全景视图（你在这里） |
 | 2 | `orchestrator.py` | 编排主循环、动态路由、人审门禁、经验沉淀 |
-| 3 | `agents/base.py` | Agent 引擎、prompt 装配、ReAct 循环 |
+| 3 | `agents/base.py` | Agent 引擎、prompt 装配、ReAct 循环、Plan-Verify |
 | 4 | `agents/*/soul.md` | 角色人格 + 工具白名单 |
 | 5 | `memory/project.py` + `experience.py` | L1 / L2 记忆如何落到 Bitable |
 | 6 | `config.py` | 字段映射、阈值、路由表、开关 |
