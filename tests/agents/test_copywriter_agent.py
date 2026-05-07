@@ -65,7 +65,8 @@ async def test_copywriter_soul_requires_reference_and_knowledge_checks(
         context={"record_id": "rec_copy", "project_name": "Launch Client"},
     )
 
-    assert agent._platform_patch_used is True
+    # copywriter 当前未配置 platforms/ 目录，patch 不会生效
+    assert agent._platform_patch_used is False
     assert result.output == "Short video script draft"
     assert result.missing_required_tools == []
     assert [call["tool_name"] for call in registry.calls] == [
