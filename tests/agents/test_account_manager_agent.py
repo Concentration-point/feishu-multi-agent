@@ -19,7 +19,10 @@ async def test_account_manager_soul_runs_with_explicit_input_context_strategy(
             "验证工具上下文 record_id/project_name/role_id 和最终 AgentResult",
         ],
     )
-    registry = FakeToolRegistry({"search_knowledge": "matched prior brief rule"})
+    registry = FakeToolRegistry({
+        "search_knowledge": "matched prior brief rule",
+        "write_project": "Brief 解读已写回主表",
+    })
     agent = make_agent("account_manager", registry=registry)
     llm = scripted_llm(
         agent,
@@ -31,6 +34,18 @@ async def test_account_manager_soul_runs_with_explicit_input_context_strategy(
                         tool_call(
                             "search_knowledge",
                             {"keywords": ["brief", "launch"]},
+                        )
+                    ],
+                )
+            ),
+            fake_response(
+                FakeMessage(
+                    content="writing brief analysis back",
+                    tool_calls=[
+                        tool_call(
+                            "write_project",
+                            {"Brief解读": "Launch campaign analysis"},
+                            "call_wp",
                         )
                     ],
                 )
@@ -78,7 +93,10 @@ async def test_account_manager_can_call_ask_human_for_blocking_info(
             "验证 ask_human 工具被真实调度，且 question / choices 参数完整透传",
         ],
     )
-    registry = FakeToolRegistry({"ask_human": "人类已选择：预算 3000-8000 / 先做小红书和大众点评"})
+    registry = FakeToolRegistry({
+        "ask_human": "人类已选择：预算 3000-8000 / 先做小红书和大众点评",
+        "write_project": "Brief 解读已写回主表",
+    })
     agent = make_agent("account_manager", registry=registry)
     scripted_llm(
         agent,
@@ -99,6 +117,18 @@ async def test_account_manager_can_call_ask_human_for_blocking_info(
                                 "title": "需要确认缺失信息",
                             },
                             "call_ask_human",
+                        )
+                    ],
+                )
+            ),
+            fake_response(
+                FakeMessage(
+                    content="写回 Brief 解读",
+                    tool_calls=[
+                        tool_call(
+                            "write_project",
+                            {"Brief解读": "烧烤店夜宵引流方案"},
+                            "call_wp",
                         )
                     ],
                 )

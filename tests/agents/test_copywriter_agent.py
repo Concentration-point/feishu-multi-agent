@@ -23,6 +23,7 @@ async def test_copywriter_soul_requires_reference_and_knowledge_checks(
         {
             "search_reference": "reference pattern",
             "search_knowledge": "platform rule",
+            "write_content": "文案已写回内容表",
         }
     )
     agent = make_agent(
@@ -42,6 +43,18 @@ async def test_copywriter_soul_requires_reference_and_knowledge_checks(
                     ],
                 )
             ),
+            fake_response(
+                FakeMessage(
+                    content="writing draft to content table",
+                    tool_calls=[
+                        tool_call(
+                            "write_content",
+                            {"draft_content": "抖音短视频脚本"},
+                            "call_wc",
+                        )
+                    ],
+                )
+            ),
             fake_response(FakeMessage(content="Short video script draft")),
         ],
     )
@@ -52,12 +65,14 @@ async def test_copywriter_soul_requires_reference_and_knowledge_checks(
         context={"record_id": "rec_copy", "project_name": "Launch Client"},
     )
 
-    assert agent._platform_patch_used is True
+    # copywriter 当前未配置 platforms/ 目录，patch 不会生效
+    assert agent._platform_patch_used is False
     assert result.output == "Short video script draft"
     assert result.missing_required_tools == []
     assert [call["tool_name"] for call in registry.calls] == [
         "search_reference",
         "search_knowledge",
+        "write_content",
     ]
     system_prompt = llm["calls"][0]["messages"][0]["content"]
     assert "抖音" in system_prompt

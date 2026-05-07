@@ -144,7 +144,7 @@ async def test_strategist_soul_loads_with_only_internal_research(
         [
             "mock LLM 跳过外网调研，直接基于内部经验出方案",
             "验证 BaseAgent 不会因为缺少 search_web 调用而报错",
-            "验证 missing_required_tools 仍为空（strategist 无硬约束）",
+            "验证 missing_required_tools 正确报告缺失的必调工具",
         ],
     )
     registry = FakeToolRegistry({"search_knowledge": "历史经验命中"})
@@ -171,5 +171,8 @@ async def test_strategist_soul_loads_with_only_internal_research(
     )
 
     assert result.output == "策略草案：基于内部经验"
-    assert result.missing_required_tools == []
+    # strategist 有硬性必调工具，仅调研不落表时会报告缺失
+    assert set(result.missing_required_tools) == {
+        "batch_create_content", "write_project", "update_status",
+    }
     assert [c["tool_name"] for c in registry.calls] == ["search_knowledge"]

@@ -1,9 +1,17 @@
 <div align="center">
 
-# 🏢 飞书·智组织 — 多 Agent 内容营销流水线
+<br/>
 
-**以飞书多维表格为事实源，6 个 AI 角色组建虚拟营销团队**
-**Brief 一键触发 → 全链路自动化 → 经验自沉淀**
+<img src="https://img.shields.io/badge/🏢-飞书·智组织-3370ff?style=for-the-badge" alt="飞书·智组织"/>
+
+# 多 Agent 内容营销流水线
+
+<p align="center">
+  <strong>以飞书多维表格为事实源，6 个 AI 角色组建虚拟营销团队</strong><br/>
+  <code>Brief 一键触发</code> → <code>全链路自动化</code> → <code>经验自沉淀</code>
+</p>
+
+<br/>
 
 <p>
   <img alt="Python"  src="https://img.shields.io/badge/Python-3.11%2B-3776ab?style=flat-square&logo=python&logoColor=white">
@@ -13,14 +21,46 @@
   <img alt="Tests"   src="https://img.shields.io/badge/Tests-45files·90%2B-brightgreen?style=flat-square">
 </p>
 
+<p>
+  <img alt="Tests"    src="https://img.shields.io/badge/tests-100_passed-brightgreen?style=flat-square"/>
+  <img alt="Agents"   src="https://img.shields.io/badge/agents-6_roles-blueviolet?style=flat-square"/>
+  <img alt="Tools"    src="https://img.shields.io/badge/tools-19-orange?style=flat-square"/>
+  <img alt="Zero Framework" src="https://img.shields.io/badge/agent_framework-自研_ReAct-critical?style=flat-square"/>
+  <img alt="Code"     src="https://img.shields.io/badge/code-12k%2B_lines-blue?style=flat-square"/>
+</p>
+
+<br/>
+
 </div>
+
+---
+
+<details open>
+<summary><h2>📑 目录</h2></summary>
+
+- [一句话定位](#-一句话定位)
+- [解决什么问题](#-解决什么问题)
+- [六大 Agent 角色](#-六大-agent-角色)
+- [主链路架构](#-主链路架构)
+- [能力全景](#-能力全景)
+- [项目结构](#-项目结构)
+- [三层记忆系统](#-三层记忆系统)
+- [知识库分层](#-知识库分层)
+- [审核与人审机制](#-审核与人审机制)
+- [快速开始](#-快速开始)
+- [运维脚本速查](#-运维脚本速查)
+- [技术栈](#-技术栈)
+- [设计原则](#-设计原则)
+- [建议阅读顺序](#-建议阅读顺序)
+
+</details>
 
 ---
 
 ## 💡 一句话定位
 
-客户在飞书多维表格新建一行 Brief，系统自动完成：
-
+> 客户在飞书多维表格新建一行 Brief，系统自动完成：
+>
 > **Brief 解读 → 人审门禁 → 联网调研策略 → 平台化文案 → 红线审核 + 返工 → 排期交付 → 经验蒸馏 → 知识沉淀**
 
 不是"AI 写一篇稿"，而是一条 **可执行、可追踪、可治理、可沉淀** 的完整业务链。
@@ -38,30 +78,31 @@
 | 交付物散落在聊天/文档中 | 自动生成飞书交付文档（含图表、排期表） | 文档结构化生成 + 图表渲染 |
 | 运营数据靠人工汇总 | 数据分析师跨项目自动出周报/洞察/决策 | 三表聚合 + 报告生成 + 群聊推送 |
 
-> **核心价值**：将 5 人团队 5-10 天的工作压缩到 AI 分钟级完成，同时保留人类决策权（人审门禁）和质量底线（红线审核）。
+> **💎 核心价值**：将 5 人团队 5-10 天的工作压缩到 AI 分钟级完成，同时保留人类决策权（人审门禁）和质量底线（红线审核）。
 
 ---
 
 ## 🎭 六大 Agent 角色
 
 ```
-┌───────────────────── 项目流水线（Orchestrator 状态驱动编排）─────────────────────┐
-│                                                                                │
-│  👔 客户经理    →  🧠 策略师     →  ✍️ 文案      →  🔍 审核    →  📋 项目经理   │
-│  Brief 解读       联网调研          逐平台成稿      通过率+红线    排期+交付收口  │
-│       │                                 ↑              │                       │
-│       ▼                                 └──── 返工 ────┘                       │
-│  🔒 人审门禁                                                                    │
-│                                                                                │
-└────────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────── 项目流水线（Orchestrator 状态驱动编排）──────────────────────┐
+│                                                                                  │
+│   👔 客户经理    →   🧠 策略师    →   ✍️ 文案     →   🔍 审核   →   📋 项目经理  │
+│   Brief 解读        联网调研         逐平台成稿      通过率+红线     排期+交付收口 │
+│        │                                  ↑              │                       │
+│        ▼                                  └──── 返工 ────┘                       │
+│   🔒 人审门禁                                                                    │
+│                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────┘
 
-┌──────────── 独立 Agent ────────────┐
-│  📊 数据分析师  data_analyst        │
-│  跨项目统计 → 运营周报/洞察/决策    │
-└────────────────────────────────────┘
+┌───────────── 独立 Agent ─────────────┐
+│   📊 数据分析师  data_analyst         │
+│   跨项目统计 → 运营周报/洞察/决策     │
+└──────────────────────────────────────┘
 ```
 
-每个角色由 `agents/{role_id}/soul.md` 定义人格与工具白名单，**新增角色 = 新建目录 + soul.md，零代码改动**。
+> 每个角色由 `agents/{role_id}/soul.md` 定义人格与工具白名单
+> **新增角色 = 新建目录 + soul.md，零代码改动**
 
 ---
 
@@ -101,7 +142,7 @@ flowchart TD
 
 ---
 
-## ✅ 能力清单
+## ✅ 能力全景
 
 | 能力模块 | 说明 | 关键文件 |
 |:---|:---|:---|
@@ -147,14 +188,14 @@ feishu-multi-agent/
 │   ├── search_web.py                #    联网搜索（Tavily）
 │   ├── negotiate.py                 #    Agent 间结构化协商
 │   ├── query_project_stats.py       #    跨项目统计
-│   └── ...                          #    更多工具见 tools/__init__.py
+│   └── ...                          #    更多见 tools/__init__.py
 │
 ├── memory/                          # 🧠 三层记忆
 │   ├── working.py                   #    L0 工作记忆（token 窗口管理）
 │   ├── project.py                   #    L1 项目记忆（Bitable 行映射）
 │   └── experience.py                #    L2 经验池（置信度 ≥ 0.75 双写）
 │
-├── feishu/                          # 📡 飞书 API 封装（直调 OpenAPI，不用 SDK）
+├── feishu/                          # 📡 飞书 API 封装（直调 OpenAPI）
 │   ├── auth.py                      #    TokenManager 单例
 │   ├── bitable.py                   #    多维表 CRUD（全局并发闸门）
 │   ├── im.py                        #    消息 + 人审卡片
@@ -175,8 +216,8 @@ feishu-multi-agent/
 ├── docs/                            # 📄 架构文档 + 验收标准
 ├── demo/                            # 🎬 Demo 脚本 + 样例 Brief
 │
-├── config.py                        # ⚙️ 配置中心（字段映射/阈值/路由表/角色名）
-├── orchestrator.py                  # 🎯 总编排器（动态路由 + 人审门禁 + 经验沉淀）
+├── config.py                        # ⚙️ 配置中心
+├── orchestrator.py                  # 🎯 总编排器
 ├── main.py                          # 🚀 入口（CLI run/sync/serve/report）
 └── requirements.txt
 ```
@@ -185,8 +226,20 @@ feishu-multi-agent/
 
 ## 🧠 三层记忆系统
 
-| 层级 | 存储位置 | 生命周期 | 作用 |
-|:---:|:---|:---|:---|
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           记忆层级架构                                       │
+├─────────┬──────────────────────┬──────────┬─────────────────────────────────┤
+│  层级   │ 存储位置              │ 生命周期 │ 作用                             │
+├─────────┼──────────────────────┼──────────┼─────────────────────────────────┤
+│  L0     │ memory/working.py    │ 单次会话 │ prompt + messages，token 裁剪   │
+│  L1     │ Bitable 项目主表     │ 单项目   │ 多角色共享事实源                  │
+│  L2     │ Bitable + 本地 Wiki  │ 跨项目   │ 蒸馏→打分→双写→溯源             │
+└─────────┴──────────────────────┴──────────┴─────────────────────────────────┘
+```
+
+| 层级 | 存储 | 生命周期 | 核心机制 |
+|:---:|:---|:---:|:---|
 | **L0** | `memory/working.py` | 单次会话 | prompt + messages + 工具上下文，按 token 整组裁剪，任务结束销毁 |
 | **L1** | Bitable 项目主表 + 内容表 | 单项目 | 多角色共享事实源，通过读写同一行记录协作 |
 | **L2** | Bitable 经验池表 + 本地 Wiki | 跨项目持久 | Hook 蒸馏 → 置信度评分（≥ 0.75）→ Bitable + Wiki 双写，溯源到 project/run/stage |
@@ -219,7 +272,7 @@ knowledge/
 
 **核心约束**：01/02/04/05 Agent 只读，不可覆盖 · 03 必须通过飞书「升格审批表」从 06 迁入 · 06 只有 Agent 写入，不推飞书
 
-详细设计 → [`docs/knowledge-architecture.md`](docs/knowledge-architecture.md)
+> 📖 详细设计 → [`docs/knowledge-architecture.md`](docs/knowledge-architecture.md)
 
 ---
 
@@ -227,12 +280,12 @@ knowledge/
 
 ### Reviewer 产出四字段
 
-| 字段 | 说明 |
-|:---|:---|
-| `review_pass_rate` | 通过率（0–1 浮点数） |
-| `review_red_flag` | 红线标记（严重合规风险/虚假宣传/绝对化用语/医疗化表述/编造数据/事实错误/严重不适配） |
-| `review_status` | 结构化状态（通过 / 需修改 / 待人审 / 超时） |
-| `review_summary` | 文本总评 |
+| 字段 | 类型 | 说明 |
+|:---|:---:|:---|
+| `review_pass_rate` | `float` | 通过率（0–1） |
+| `review_red_flag` | `string` | 红线标记（严重合规风险 / 虚假宣传 / 绝对化用语 / 医疗化表述 / 编造数据 / 事实错误） |
+| `review_status` | `enum` | 通过 / 需修改 / 待人审 / 超时 |
+| `review_summary` | `text` | 文本总评 |
 
 ### Orchestrator 决策矩阵
 
@@ -256,6 +309,10 @@ knowledge/
 
 ### 人审门禁（客户经理 → 策略师之间）
 
+```
+飞书交互卡片 → 轮询群消息 → 识别操作 → 流转/回退
+```
+
 1. 发飞书交互卡片到群聊
 2. 轮询群消息，识别「通过」/「修改：xxx」/ 超时
 3. 超时默认同意（`AUTO_APPROVE_HUMAN_REVIEW=true` 为 Demo 快跑模式）
@@ -277,7 +334,8 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-**最小必填**：
+<details>
+<summary><b>📋 最小必填配置</b></summary>
 
 ```env
 FEISHU_APP_ID=cli_xxx
@@ -290,7 +348,10 @@ LLM_API_KEY=sk-xxx
 LLM_MODEL=gpt-4o
 ```
 
-**常用可选**：
+</details>
+
+<details>
+<summary><b>🔧 常用可选配置</b></summary>
 
 ```env
 FEISHU_CHAT_ID=oc_xxx              # IM 广播 & 人审卡片目标群
@@ -300,6 +361,8 @@ WEBHOOK_VERIFICATION_TOKEN=xxx     # 飞书事件订阅校验
 AUTO_APPROVE_HUMAN_REVIEW=false    # Demo 快跑模式设 true
 EXPERIENCE_CONFIDENCE_THRESHOLD=0.75  # L2 经验沉淀置信度阈值
 ```
+
+</details>
 
 ### 3️⃣ 初始化知识库（首次）
 
@@ -324,10 +387,16 @@ python main.py serve
 # 访问 http://localhost:8000/static/index.html
 ```
 
-飞书事件订阅配置：
-- **请求地址**：`http(s)://<host>:8000/webhook/event`
-- **订阅事件**：`bitable.record.created_v1`
-- **所需权限**：多维表格读写 + 知识空间写入 + IM 发消息
+<details>
+<summary><b>🔗 飞书事件订阅配置</b></summary>
+
+| 项目 | 值 |
+|:---|:---|
+| **请求地址** | `http(s)://<host>:8000/webhook/event` |
+| **订阅事件** | `bitable.record.created_v1` |
+| **所需权限** | 多维表格读写 + 知识空间写入 + IM 发消息 |
+
+</details>
 
 ### 6️⃣ 数据分析报告
 
@@ -381,7 +450,7 @@ python main.py sync --direction both
 
 ---
 
-## 🎯 关键设计原则
+## 🎯 设计原则
 
 - **配置驱动，零代码扩展** — 新增角色 = 新建 `soul.md`，声明工具白名单即可
 - **飞书即事实源** — Bitable 行记录是共享黑板，多角色读写同一行记录协作，无内部 RPC
@@ -394,9 +463,9 @@ python main.py sync --direction both
 
 ## 📖 建议阅读顺序
 
-| 顺序 | 文件 | 要点 |
+| # | 文件 | 要点 |
 |:---:|:---|:---|
-| 1 | `README.md` | 全景视图（你在这里） |
+| 1 | 📍 `README.md` | 全景视图（你在这里） |
 | 2 | `orchestrator.py` | 编排主循环、动态路由、人审门禁、经验沉淀 |
 | 3 | `agents/base.py` | Agent 引擎、prompt 装配、ReAct 循环、Plan-Verify |
 | 4 | `agents/*/soul.md` | 角色人格 + 工具白名单 |
@@ -411,6 +480,13 @@ python main.py sync --direction both
 
 <div align="center">
 
-**这不是 AI 写文案，这是把一条真实内容营销业务链做成可执行、可追踪、可治理、可沉淀的系统。**
+<br/>
+
+> **这不是 AI 写文案，这是把一条真实内容营销业务链**
+> **做成可执行、可追踪、可治理、可沉淀的系统。**
+
+<br/>
+
+<sub>Built with ❤️ by 智策传媒虚拟团队</sub>
 
 </div>
