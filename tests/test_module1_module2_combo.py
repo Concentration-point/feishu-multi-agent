@@ -24,10 +24,7 @@ if str(ROOT) not in sys.path:
 from tools import ToolRegistry, AgentContext
 from agents.base import (
     parse_soul,
-    _ROLE_REFLECT_PROMPTS,
     _REQUIRED_TOOL_CALLS,
-    _COPYWRITER_REFLECT_PROMPT,
-    _REVIEWER_REFLECT_PROMPT,
 )
 
 
@@ -57,24 +54,7 @@ async def main() -> int:
         fails.append(f"copywriter 硬约束不含双工具: {required}")
         print(f"[FAIL] copywriter 硬约束: {required}")
 
-    # 3) reflect prompt 含双轨字段
-    prompt = _COPYWRITER_REFLECT_PROMPT
-    fields_needed = ["reference_pattern", "rule_check", "conflict_handling"]
-    missing_fields = [f for f in fields_needed if f not in prompt]
-    if missing_fields:
-        fails.append(f"copywriter reflect prompt 缺字段 {missing_fields}")
-        print(f"[FAIL] copywriter reflect prompt 缺字段 {missing_fields}")
-    else:
-        print(f"[PASS] copywriter reflect prompt 含 {fields_needed}")
-
-    # 4) reviewer reflect prompt 正确声明 applicable_roles 含 copywriter（反哺通道）
-    if "copywriter" in _REVIEWER_REFLECT_PROMPT:
-        print("[PASS] reviewer reflect prompt 已声明 applicable_roles=[reviewer, copywriter]")
-    else:
-        fails.append("reviewer reflect prompt 未含反哺声明")
-        print("[FAIL] reviewer reflect prompt 未含 copywriter")
-
-    # 5) 双链路检索实证
+    # 3) 双链路检索实证
     reg = ToolRegistry()
     ctx = AgentContext(
         record_id="rec_combo_test",
@@ -130,21 +110,7 @@ async def main() -> int:
         fails.append("read_knowledge 读取规则失败")
         print(f"[FAIL] read_knowledge 失败: {r4[:200]}")
 
-    # 6) 反哺通道：模拟 reviewer 蒸馏的经验卡片在 applicable_roles 里含 copywriter
-    #    base.py 行 505 有代码级兜底确保这一点
-    import inspect
-    from agents import base as base_mod
-
-    source = inspect.getsource(base_mod._hook_reflect) if hasattr(base_mod, "_hook_reflect") else ""
-    # 退化方案：直接看 BaseAgent._hook_reflect 源代码
-    source = inspect.getsource(base_mod.BaseAgent._hook_reflect)
-    if 'self.role_id == "reviewer"' in source and '"copywriter"' in source:
-        print("[PASS] _hook_reflect 代码级兜底：reviewer→copywriter 反哺确保")
-    else:
-        fails.append("_hook_reflect 未见 reviewer→copywriter 兜底")
-        print("[FAIL] _hook_reflect 反哺兜底逻辑异常")
-
-    # 7) soul.md 包含融合工作流关键词（冲突处理 + 双标注）
+    # 6) soul.md 包含融合工作流关键词（冲突处理 + 双标注）
     body = soul.body
     workflow_kw = ["强制双轨工作流", "轨道 A", "轨道 B", "规则优先于爆款", "对标参考", "合规自检"]
     missing_kw = [k for k in workflow_kw if k not in body]

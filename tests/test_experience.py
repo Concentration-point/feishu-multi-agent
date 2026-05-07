@@ -194,64 +194,6 @@ async def test_wiki_write() -> None:
     state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-async def test_hook_reflect() -> None:
-    if not env_value("LLM_API_KEY"):
-        report.ok("Hook 自省-跳过", "缺少 LLM_API_KEY")
-        return
-
-    from agents.base import BaseAgent
-    from config import LLM_API_KEY, LLM_BASE_URL
-    from openai import AsyncOpenAI
-
-    mock_messages = [
-        {"role": "system", "content": "你是智策传媒的客户经理。"},
-        {"role": "user", "content": "请处理电商大促项目。"},
-        {
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [
-                {
-                    "id": "call_1",
-                    "type": "function",
-                    "function": {
-                        "name": "read_project",
-                        "arguments": '{"fields": ["brief_content", "brand_tone"]}',
-                    },
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "call_1",
-            "content": '{"brief_content": "双十一电商大促，主推精华液", "brand_tone": "科技感、专业可信赖"}',
-        },
-        {
-            "role": "assistant",
-            "content": "Brief 解读完成。核心诉求是双十一期间推广精华液，目标受众 25-35 岁女性。",
-        },
-    ]
-
-    agent = BaseAgent.__new__(BaseAgent)
-    agent.role_id = "account_manager"
-    agent.soul = type("Soul", (), {"name": "客户经理"})()
-    agent._llm = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
-
-    card = await agent._hook_reflect(mock_messages)
-    if not card:
-        report.fail("Hook 自省", "返回 None")
-        return
-
-    required = ["situation", "action", "outcome", "lesson", "category", "applicable_roles"]
-    missing = [field for field in required if field not in card]
-    if missing:
-        report.fail("Hook 自省", f"缺少字段: {missing}")
-        return
-    if len(card.get("lesson", "")) < 10:
-        report.fail("Hook 自省", f"lesson 过短: {card.get('lesson', '')}")
-        return
-
-    print(f"  Hook 经验卡预览: {json.dumps(card, ensure_ascii=False)[:200]}")
-    report.ok("Hook 自省", card["lesson"][:60])
 
 
 def bitable_ready() -> bool:
@@ -389,23 +331,15 @@ async def test_evolution_compare() -> None:
         )
         agent_a = BaseAgent(role_id="account_manager", record_id=record_a)
         output_a = await agent_a.run()
-        if not agent_a._pending_experience:
-            report.fail("第三层闭环对比", "第一次运行未产出经验卡")
-            return
 
         saved_count_before = len(await em.query_top_k("account_manager", TEST_SCENE, k=20))
-        settled_card = dict(agent_a._pending_experience)
-        settled_card["category"] = TEST_SCENE
 
+        # 蒸馏现由 Orchestrator 基于外部反馈信号触发（链路B：human_feedback 字段非空）
         orchestrator = Orchestrator(record_a)
         orchestrator.stage_results = [
             StageResult(role_id="account_manager", ok=True, duration_sec=0.0, output=output_a or "")
         ]
-        await orchestrator._settle_experiences(
-            [{"role_id": "account_manager", "card": settled_card, "agent": agent_a}],
-            TEST_PROJECT_A,
-            0.8,
-        )
+        await orchestrator._settle_experiences(TEST_PROJECT_A, 0.8)
         saved_count_after = len(await em.query_top_k("account_manager", TEST_SCENE, k=20))
         if saved_count_after < saved_count_before:
             report.fail("第三层闭环对比", "第一次沉淀后经验数异常减少")
@@ -455,7 +389,6 @@ async def main() -> None:
     for name, fn in [
         ("置信度打分", test_confidence_scoring),
         ("wiki 写入", test_wiki_write),
-        ("Hook 自省", test_hook_reflect),
     ]:
         try:
             await fn()

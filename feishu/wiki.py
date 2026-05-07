@@ -14,6 +14,8 @@ from feishu.wiki_markdown import _LANGUAGE_REVERSE_MAP
 
 logger = logging.getLogger(__name__)
 
+NEW_DOC_READY_DELAY_SECONDS = 2.0
+
 
 class FeishuWikiClient:
     """飞书知识空间读写客户端。"""
@@ -121,6 +123,22 @@ class FeishuWikiClient:
         for k in list(self._node_cache.keys()):
             if k == space_id or k.startswith(prefix):
                 self._node_cache.pop(k, None)
+
+    async def wait_for_new_doc_ready(
+        self,
+        document_id: str,
+        *,
+        delay_seconds: float = NEW_DOC_READY_DELAY_SECONDS,
+    ) -> None:
+        """Wait for the backing docx to become readable after wiki node creation."""
+        if not document_id:
+            return
+        logger.info(
+            "wait_for_new_doc_ready doc=%s sleep=%.1fs",
+            document_id,
+            delay_seconds,
+        )
+        await asyncio.sleep(delay_seconds)
 
     async def find_node_by_title(self, space_id: str, title: str, parent_token: str | None = None) -> dict | None:
         """按 title 查找节点。传入 parent_token 会直接在该父节点下查（精确 + 高效）。"""

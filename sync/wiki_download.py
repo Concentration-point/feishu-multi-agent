@@ -1,13 +1,15 @@
 """后台 Wiki 下行同步服务 — 飞书知识空间 → 本地知识库。
 
 与上行同步（sync/wiki_sync.py）的对称实现：
-- 上行只推 07-10（Agent / 系统产出），source of truth = 本地
-- 下行只拉 01-06（人类维护知识），source of truth = 飞书
+- 上行只推 03_经验沉淀（Agent 产出，source of truth = 本地）
+- 下行只拉 01/02/04/05（人类维护知识，source of truth = 飞书）
 
-目录映射规则与上行共享 WikiSyncService._LAYER_LABELS：
-    飞书「企业底座」节点下的所有文档 → 本地 knowledge/01_企业底座/
-    飞书「企业底座-子分类」节点下的所有文档 → knowledge/01_企业底座/子分类/
-    以此类推到 06_客户档案。
+目录映射规则：
+    飞书「审核库」节点下的所有文档 → 本地 knowledge/01_审核库/
+    飞书「审核库-子分类」节点下的所有文档 → knowledge/01_审核库/子分类/
+    以此类推到 02_客户档案 / 04_服务方法论 / 05_平台打法。
+
+注：下行写入时会保留本地文件已有的 YAML frontmatter，避免元信息丢失。
 
 .sync_state.json 为每条下行记录追加:
     remote_obj_token: 飞书文档的 obj_token
@@ -32,24 +34,24 @@ from feishu.wiki_markdown import blocks_to_markdown
 logger = logging.getLogger(__name__)
 
 
-# 只下行这些顶层（01-06，人类维护）
-# 本地顶层目录 → 飞书父节点中文名
+# 只下行这些顶层（人工维护层），本地顶层目录 → 飞书父节点中文名
+# 03_经验沉淀 是上行目标，不在此列
+# 06_待整理收件箱 是 Agent 脏缓冲，不参与双向同步
 _DOWNLOAD_LAYER_LABELS: dict[str, str] = {
-    "01_企业底座": "企业底座",
-    "02_服务方法论": "服务方法论",
-    "03_行业知识": "行业知识",
-    "04_平台打法": "平台打法",
-    "05_标准模板": "标准模板",
-    "06_客户档案": "客户档案",
+    "01_审核库": "审核库",
+    "02_客户档案": "客户档案",
+    "04_服务方法论": "服务方法论",
+    "05_平台打法": "平台打法",
 }
 
 
 class WikiDownloadService:
-    """下行同步服务：飞书知识空间 → 本地 knowledge/01-06/。
+    """下行同步服务：飞书知识空间 → 本地 knowledge/01/02/04/05/。
 
     - 启动时和定时拉取
-    - 只对映射到 01-06 的飞书节点生效
+    - 只对映射到人工维护层（01_审核库 / 02_客户档案 / 04_服务方法论 / 05_平台打法）的飞书节点生效
     - 飞书侧的 title / 层级变化会自动反映到本地（删除/重命名除外 —— 本地不主动删文件）
+    - 下行写入时保留本地已有的 YAML frontmatter，避免元信息丢失
     """
 
     def __init__(self, space_id: str, interval: int = 1800):
@@ -67,12 +69,6 @@ class WikiDownloadService:
             "[WikiDownload] 后台下行同步已启动，间隔 %ds，空间 %s",
             self.interval, self.space_id,
         )
-        # 启动时先跑一次，保证本地是最新
-        try:
-            await self.download_once()
-        except Exception as e:
-            logger.error("[WikiDownload] 首次下行同步异常: %s", e)
-
         while True:
             await asyncio.sleep(self.interval)
             try:
@@ -179,8 +175,13 @@ class WikiDownloadService:
         if entry.get("remote_hash") == remote_hash:
             return "skipped"
 
-        # 写本地
+        # 保留本地已有的 YAML frontmatter，避免下行覆盖时丢失元信息
         full_path = self._base_path / local_rel_path
+        existing_frontmatter = _extract_frontmatter(full_path)
+        if existing_frontmatter:
+            md = existing_frontmatter + md
+
+        # 写本地
         full_path.parent.mkdir(parents=True, exist_ok=True)
         full_path.write_text(md, encoding="utf-8")
 
@@ -201,7 +202,7 @@ class WikiDownloadService:
     def _map_remote_to_local(
         self, node: dict, node_map: dict[str, dict]
     ) -> str | None:
-        """把飞书节点映射成本地相对路径（如 "02_服务方法论/brief解读.md"）。
+        """把飞书节点映射成本地相对路径（如 "04_服务方法论/brief解读.md"）。
 
         规则：
         - 顶层父节点 title 必须命中 01-06 反向映射
@@ -264,8 +265,8 @@ class WikiDownloadService:
         """把顶层父节点 title 解析成 (本地顶层目录, 子分类段)。
 
         规则：
-        - 「企业底座」 → ("01_企业底座", None)
-        - 「企业底座-brief_sop」 → ("01_企业底座", "brief_sop")
+        - 「审核库」 → ("01_审核库", None)
+        - 「平台打法-抖音」 → ("05_平台打法", "抖音")
         - 其它 → (None, None)
         """
         # 先尝试完全匹配
@@ -310,3 +311,22 @@ def _sanitize_filename(name: str) -> str:
             out.append(ch)
     cleaned = "".join(out).strip().strip(".")
     return cleaned or "未命名"
+
+
+def _extract_frontmatter(path: "Path") -> str:
+    """提取本地文件的 YAML frontmatter（含首尾 --- 分隔符）。
+
+    如果文件不存在或没有 frontmatter，返回空字符串。
+    返回值末尾保留一个换行，便于直接拼接正文。
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    text = text.replace("\r\n", "\n")
+    if not text.startswith("---\n"):
+        return ""
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return ""
+    return text[: end + 5]  # 包含结尾 ---\n

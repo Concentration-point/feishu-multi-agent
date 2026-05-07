@@ -7,6 +7,8 @@
   3. 在飞书知识空间创建/更新结构化文档
 """
 
+import asyncio
+import functools
 import json
 import logging
 from datetime import datetime
@@ -85,7 +87,7 @@ def _compute_platform_pass_rates(content_data: dict) -> dict[str, float]:
     return rates
 
 
-def _build_blocks(
+async def _build_blocks(
     report_type: str,
     title: str,
     summary: str,
@@ -134,12 +136,18 @@ def _build_blocks(
                 table_rows.append([status, str(count), _pct(count / total if total else 0)])
             blocks.append({"type": "table", "rows": table_rows})
 
-            # 项目状态图表
+            # 项目状态图表（run_in_executor 防止同步 matplotlib 阻塞事件循环）
             try:
                 from feishu.report_charts import generate_project_status_chart
-                chart_png = generate_project_status_chart(status_data)
+                _loop = asyncio.get_event_loop()
+                chart_png = await asyncio.wait_for(
+                    _loop.run_in_executor(None, generate_project_status_chart, status_data),
+                    timeout=15.0,
+                )
                 if chart_png:
                     blocks.append({"type": "image", "data": chart_png, "name": "project_status.png"})
+            except asyncio.TimeoutError:
+                logger.warning("项目状态图表生成超时（15s），跳过")
             except Exception as e:
                 logger.warning("项目状态图表生成失败: %s", e)
 
@@ -168,12 +176,21 @@ def _build_blocks(
                 rate_rows.append([plat, _pct(rate), str(by_platform.get(plat, 0))])
             blocks.append({"type": "table", "rows": rate_rows})
 
-            # 通过率图表
+            # 通过率图表（run_in_executor 防止同步 matplotlib 阻塞事件循环）
             try:
                 from feishu.report_charts import generate_platform_pass_rate_chart
-                chart_png = generate_platform_pass_rate_chart(platform_rates)
+                _loop = asyncio.get_event_loop()
+                chart_png = await asyncio.wait_for(
+                    _loop.run_in_executor(
+                        None,
+                        functools.partial(generate_platform_pass_rate_chart, platform_rates),
+                    ),
+                    timeout=15.0,
+                )
                 if chart_png:
                     blocks.append({"type": "image", "data": chart_png, "name": "pass_rate.png"})
+            except asyncio.TimeoutError:
+                logger.warning("通过率图表生成超时（15s），跳过")
             except Exception as e:
                 logger.warning("通过率图表生成失败: %s", e)
 
@@ -256,18 +273,26 @@ async def execute(params: dict, context: AgentContext) -> str:
         return f"报告文档生成失败: 无法拉取统计数据 — {e}"
 
     # 2. 构建文档块
-    blocks = _build_blocks(report_type, title, summary, recommendations, stats)
+    blocks = await _build_blocks(report_type, title, summary, recommendations, stats)
 
     # 3. 创建飞书知识空间节点并写入
     try:
         from feishu.wiki import FeishuWikiClient
-        from sync.wiki_sync import WikiSyncService
 
         wiki = FeishuWikiClient()
-        sync_svc = WikiSyncService(WIKI_SPACE_ID)
+
+        # 从根层节点推导空间根 token，再用它精确查找，避免无 parent_token 时 API 行为不确定
+        root_level_nodes = await wiki.list_nodes(WIKI_SPACE_ID)
+        space_root_token = (
+            root_level_nodes[0].get("parent_node_token", "") if root_level_nodes else ""
+        )
 
         parent_title = "数据分析报告"
-        parent_node = await sync_svc._ensure_parent_node(parent_title)
+        parent_node = await wiki.find_node_by_title(
+            WIKI_SPACE_ID, parent_title, space_root_token or None
+        )
+        if not parent_node:
+            parent_node = await wiki.create_node(WIKI_SPACE_ID, space_root_token, parent_title)
         parent_token = parent_node["node_token"]
 
         existing = await wiki.find_node_by_title(WIKI_SPACE_ID, title, parent_token)
@@ -276,6 +301,8 @@ async def execute(params: dict, context: AgentContext) -> str:
         else:
             node = await wiki.create_node(WIKI_SPACE_ID, parent_token, title)
             obj_token = node.get("obj_token", "")
+            if obj_token:
+                await wiki.wait_for_new_doc_ready(obj_token)
 
         if not obj_token:
             return "报告文档生成失败: 无法获取 document_id"

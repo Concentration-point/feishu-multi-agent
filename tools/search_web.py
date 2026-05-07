@@ -7,6 +7,7 @@ Agent 无感知切换，SCHEMA 不变。
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 import re
@@ -94,12 +95,12 @@ SCHEMA = {
                 "time_range": {
                     "type": "string",
                     "enum": ["day", "week", "month", "year"],
-                    "default": "month",
+                    "default": "year",
                     "description": (
-                        "时间过滤，强烈建议每次都传。"
+                        "时间过滤，默认 year（近 1 年）。系统强制下限：搜索结果不早于 2 年前，"
+                        "不会返回 3 年以上的过期内容。"
                         "news 类搜索用 day 或 week；趋势/打法分析用 month；"
-                        "仅当搜索方法论、学术概念等不受时效影响的内容时才用 year。"
-                        "不传此参数会返回全时间范围结果，极易搜出过期内容。"
+                        "方法论、学术概念等时效性弱的内容用 year（默认）。"
                     ),
                 },
                 "max_results": {
@@ -144,14 +145,36 @@ def _clean_snippet(snippet: str, limit: int = 300) -> str:
     return compact
 
 
-async def _search_metaso(query: str, max_results: int) -> dict:
+def _time_range_to_date(time_range: str | None, *, years_fallback: int = 2) -> str:
+    """把 time_range 转成 YYYY-MM-DD 截止日期（往前推），用于秘塔 publishedAfter。
+    未指定时默认取 years_fallback 年前，确保不返回过期内容。
+    """
+    now = datetime.datetime.now()
+    delta_map = {
+        "day": datetime.timedelta(days=1),
+        "week": datetime.timedelta(weeks=1),
+        "month": datetime.timedelta(days=30),
+        "year": datetime.timedelta(days=365),
+    }
+    delta = delta_map.get(time_range or "")
+    if delta is None:
+        # 默认 2 年
+        cutoff = now.replace(year=now.year - years_fallback)
+    else:
+        cutoff = now - delta
+    return cutoff.strftime("%Y-%m-%d")
+
+
+async def _search_metaso(query: str, max_results: int, time_range: str | None = None) -> dict:
     """调用秘塔 AI 搜索 API，返回与 Tavily 同结构的结果字典。"""
     timeout = httpx.Timeout(connect=10.0, read=20.0, write=10.0, pool=5.0)
+    published_after = _time_range_to_date(time_range)
     payload = {
         "q": query,
         "scope": "webpage",
         "includeSummary": True,
         "size": max_results,
+        "publishedAfter": published_after,
     }
     headers = {
         "Content-Type": "application/json",
@@ -233,7 +256,8 @@ async def execute(params: dict, context: AgentContext) -> dict:
         return _error("missing_query", "query cannot be empty after cleaning", query=original_query)
 
     topic = params.get("topic") or "general"
-    time_range = params.get("time_range")
+    # 强制下限：不传时默认 year，防止搜到 2 年以上的过期内容
+    time_range = params.get("time_range") or "year"
     max_results = int(params.get("max_results") or TAVILY_DEFAULT_MAX_RESULTS)
     max_results = max(1, min(10, max_results))
 
@@ -245,8 +269,8 @@ async def execute(params: dict, context: AgentContext) -> dict:
         )
 
     if use_metaso:
-        logger.info("search_web [引擎=秘塔] query=%s", query[:80])
-        result = await _search_metaso(query, max_results)
+        logger.info("search_web [引擎=秘塔] query=%s time_range=%s", query[:80], time_range)
+        result = await _search_metaso(query, max_results, time_range)
         result.setdefault("original_query", original_query)
         result.setdefault("topic", topic)
         result.setdefault("time_range", time_range)

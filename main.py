@@ -52,6 +52,19 @@ async def lifespan(_app: FastAPI):
         yield
     finally:
         card_actions.shutdown()
+
+        # Windows 关闭保障：后台 watchdog，8s 内清理未完成则强制 os._exit
+        # 原因：lark_oapi ws 线程留有 Windows IOCP 句柄，可能导致 await 永久挂起
+        import sys as _sys, threading as _td, os as _os
+        def _shutdown_watchdog():
+            import time
+            time.sleep(8)
+            logger.warning("[Shutdown] 清理挂起超 8s，强制退出")
+            _sys.stdout.flush()
+            _sys.stderr.flush()
+            _os._exit(0)
+        _td.Thread(target=_shutdown_watchdog, daemon=True, name="shutdown-watchdog").start()
+
         await _cancel_all_pipelines()
         await _stop_background_download()
         await _stop_background_sync()
@@ -692,48 +705,55 @@ async def tool_stats(
 
 @app.get("/stream")
 async def global_event_stream():
-    """全局 SSE 端点：接收所有项目的实时事件。Dashboard 默认连这个。"""
+    """全局 SSE 端点：接收所有项目的实时事件。Dashboard 默认连这个。
+
+    改动：
+      - 连接建立后立即发 ": connected" comment，让浏览器/代理知道连接有效
+      - 每 15 秒发一次心跳 comment，防止 Vite proxy / nginx 因静默断连
+    """
+    _SSE_HEADERS = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
 
     async def generate():
+        yield ": connected\n\n"  # 立即证明连接有效
         try:
-            async for evt in event_bus.subscribe_all():
-                data = json.dumps(evt, ensure_ascii=False)
-                yield f"data: {data}\n\n"
+            async for evt in event_bus.subscribe_all_with_heartbeat(interval=15.0):
+                if evt is None:
+                    yield ": heartbeat\n\n"
+                else:
+                    data = json.dumps(evt, ensure_ascii=False)
+                    yield f"data: {data}\n\n"
         except asyncio.CancelledError:
             return
 
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 @app.get("/stream/{record_id}")
 async def event_stream(record_id: str):
     """SSE 端点：推送指定项目的实时事件。"""
+    _SSE_HEADERS = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
 
     async def generate():
+        yield ": connected\n\n"
         try:
-            async for evt in event_bus.subscribe(record_id):
-                data = json.dumps(evt, ensure_ascii=False)
-                yield f"data: {data}\n\n"
+            async for evt in event_bus.subscribe_with_heartbeat(record_id, interval=15.0):
+                if evt is None:
+                    yield ": heartbeat\n\n"
+                else:
+                    data = json.dumps(evt, ensure_ascii=False)
+                    yield f"data: {data}\n\n"
         except asyncio.CancelledError:
             return
 
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return StreamingResponse(generate(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 # ── Webhook 端点 ──
@@ -848,6 +868,9 @@ def main() -> int:
         uvicorn.run(app, host="0.0.0.0", port=WEBHOOK_PORT)
         # Windows ProactorEventLoop 在 lark_oapi ws 线程中留有未清理的 I/O handle，
         # uvicorn 已完成 graceful shutdown（lifespan finally 已跑完），直接 os._exit 绕过残留句柄
+        import sys
+        sys.stdout.flush()
+        sys.stderr.flush()
         os._exit(0)
 
     parser.print_help()

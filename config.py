@@ -82,12 +82,11 @@ EXPERIENCE_SIMILARITY_DEDUP_THRESHOLD: float = float(
     os.getenv("EXPERIENCE_SIMILARITY_DEDUP_THRESHOLD", "0.85")
 )
 
-# 上行同步（本地 → 飞书）间隔，默认 1 小时
-SYNC_INTERVAL: int = int(os.getenv("SYNC_INTERVAL", "3600"))
+# 上行同步（本地 → 飞书）间隔，临时调大为 30000s（约 8 小时）禁用自动触发
+SYNC_INTERVAL: int = int(os.getenv("SYNC_INTERVAL", "30000"))
 
-# 下行同步（飞书 → 本地）间隔，默认 30 分钟
-# 01-06 是人类维护的知识，改动频率低，30min 延迟 Agent 感知不到
-WIKI_DOWNLOAD_INTERVAL: int = int(os.getenv("WIKI_DOWNLOAD_INTERVAL", "1800"))
+# 下行同步（飞书 → 本地）间隔，临时调大为 30000s 禁用自动触发
+WIKI_DOWNLOAD_INTERVAL: int = int(os.getenv("WIKI_DOWNLOAD_INTERVAL", "30000"))
 
 # 是否启用下行同步（默认 true；设为 false 可完全禁用拉取）
 WIKI_DOWNLOAD_ENABLED: bool = os.getenv("WIKI_DOWNLOAD_ENABLED", "true").lower() in ("true", "1", "yes")
@@ -99,6 +98,7 @@ LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-4o")
 LLM_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
 LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "2"))       # SDK 层内置重试数（极短抖动）
 LLM_APP_MAX_RETRIES: int = int(os.getenv("LLM_APP_MAX_RETRIES", "3"))  # 应用层指数退避重试数
+LLM_TOTAL_TIMEOUT_SECONDS: float = float(os.getenv("LLM_TOTAL_TIMEOUT_SECONDS", "90"))  # 单次 LLM 调用总超时上限（含应用层重试）
 MAX_ROUTE_STEPS: int = int(os.getenv("MAX_ROUTE_STEPS", "15"))  # 防路由死循环安全上限
 STAGE_TIMEOUT_SECONDS: float = float(os.getenv("STAGE_TIMEOUT_SECONDS", "600"))  # 单 Agent 阶段超时（秒）
 IM_TIMEOUT_SECONDS: float = float(os.getenv("IM_TIMEOUT_SECONDS", "15"))  # 飞书 IM API 超时（秒）

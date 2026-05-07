@@ -103,24 +103,13 @@ async def test_evolution_log_integration() -> None:
         orig_cwd = os.getcwd()
         os.chdir(tmpdir)
         try:
-            # 构造两个 Agent 实例的 mock，模拟 account_manager 注入 3 条、reviewer 注入 2 条
-            class FakeAgent:
-                def __init__(self, count):
-                    self._injected_experience_count = count
-
-            pending_experiences = [
-                {"agent": FakeAgent(3), "role_id": "account_manager"},
-                {"agent": FakeAgent(2), "role_id": "reviewer"},
-                {"agent": None},  # 无 agent 条目，不应报错
-            ]
-
             o = Orchestrator.__new__(Orchestrator)
             o.record_id = "fix08_e2e_test"
             o.reviewer_retries = 1
             o._event_bus = None
 
             await o._append_evolution_log(
-                "FIX08 测试客户", "电商大促", 0.85, pending_experiences
+                "FIX08 测试客户", "电商大促", 0.85
             )
 
             log_path = Path("evolution_log.json")
@@ -146,12 +135,12 @@ async def test_evolution_log_integration() -> None:
             else:
                 ok("7 个字段完整", str(list(entry.keys())))
 
-            # experiences_injected = 3 + 2 = 5
+            # experiences_injected: 蒸馏重构后不再从 pending 汇总，固定为 0
             ei = entry.get("experiences_injected", -1)
-            if ei == 5:
-                ok("experiences_injected = 真实注入数", f"account_manager(3) + reviewer(2) = {ei}")
+            if ei == 0:
+                ok("experiences_injected = 0（蒸馏重构后固定值）", f"实际={ei}")
             else:
-                fail("experiences_injected 正确", f"期望5，实际{ei}")
+                fail("experiences_injected 正确", f"期望0，实际{ei}")
 
             # 数值类型
             type_checks = {

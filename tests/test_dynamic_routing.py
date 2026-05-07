@@ -139,8 +139,6 @@ class _MockAgent:
         self.record_id = record_id
         self._event_bus = event_bus
         self._task_filter = task_filter or {}
-        self._pending_experience = None
-        self._wiki_written = False
         self._messages = []
 
     async def run(self):

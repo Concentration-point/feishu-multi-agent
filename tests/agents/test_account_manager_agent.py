@@ -49,7 +49,8 @@ async def test_account_manager_soul_runs_with_explicit_input_context_strategy(
     assert result.output == "Brief analysis ready"
     assert result.meta["mode"] == "unit"
     assert result.meta["project_name"] == "Launch Client"
-    assert result.missing_required_tools == []
+    # unit 模式只调了 search_knowledge，write_project 未调用（此场景只验证 search 路径）
+    assert result.missing_required_tools == ["write_project"]
     assert registry.calls == [
         {
             "tool_name": "search_knowledge",
@@ -116,7 +117,8 @@ async def test_account_manager_can_call_ask_human_for_blocking_info(
     assert result.output == "Brief analysis ready with confirmed budget and platform."
     assert result.meta["mode"] == "unit"
     assert result.meta["project_name"] == "BBQ AskHuman"
-    assert result.missing_required_tools == []
+    # unit 模式只调了 ask_human，write_project 未调用（此场景只验证 ask_human 路径）
+    assert result.missing_required_tools == ["write_project"]
     assert [call["tool_name"] for call in registry.calls] == ["ask_human"]
     assert registry.calls[0]["params"]["title"] == "需要确认缺失信息"
     assert "缺少预算和重点平台" in registry.calls[0]["params"]["question"]

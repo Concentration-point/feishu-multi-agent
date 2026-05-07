@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 # 不写死绝对路径：以 KNOWLEDGE_BASE_PATH 为基（默认 "knowledge"），
 # 相对路径解析以项目根目录为锚（本文件在 tools/ 下，根 = parents[1]）。
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
-_FORBIDDEN_RELATIVE = "02_服务方法论/广告法禁用词.md"
+_FORBIDDEN_RELATIVE = "04_服务方法论/广告法禁用词.md"
 
 
 def _resolve_forbidden_file() -> Path:

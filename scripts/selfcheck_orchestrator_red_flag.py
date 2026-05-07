@@ -17,8 +17,6 @@ if "agents.base" not in sys.modules:
 
     class BaseAgent:  # minimal placeholder
         def __init__(self, *args, **kwargs):
-            self._pending_experience = None
-            self._wiki_written = False
             self._messages = []
 
         async def run(self):

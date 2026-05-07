@@ -27,9 +27,8 @@ from openai import (
 
 from config import (
     LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, LLM_MAX_RETRIES, LLM_APP_MAX_RETRIES,
-    LLM_TIMEOUT_SECONDS, EXPERIENCE_TOP_K,
+    LLM_TIMEOUT_SECONDS, LLM_TOTAL_TIMEOUT_SECONDS, EXPERIENCE_TOP_K,
     L0_MESSAGE_WINDOW_MAX_TOKENS, L0_MESSAGE_WINDOW_RESERVE_TOKENS,
-    EXPERIENCE_POOL_ROLE_ALLOWLIST,
 )
 from memory.project import BriefProject, ContentMemory, ProjectMemory
 from memory.experience import ExperienceManager
@@ -40,99 +39,6 @@ logger = logging.getLogger(__name__)
 
 # 项目根目录 / agents 目录
 _AGENTS_DIR = Path(__file__).parent
-
-# ── 角色专用自省 prompt（按 role_id 分化）──
-
-_DEFAULT_REFLECT_PROMPT = (
-    "你刚完成了一项工作。回顾你的整个执行过程（包括你调用了哪些工具、"
-    "得到了什么结果、遇到了什么问题），用以下 JSON 格式总结一条可复用的经验：\n\n"
-    "{\n"
-    '  "situation": "你面对的具体任务场景",\n'
-    '  "action": "你采取的关键策略或方法",\n'
-    '  "outcome": "结果如何",\n'
-    '  "lesson": "下次遇到类似场景，最重要的一条具体可执行的建议",\n'
-    '  "category": "电商大促|新品发布|品牌传播|日常运营",\n'
-    '  "applicable_roles": ["当前角色ID"]\n'
-    "}\n\n"
-    "要求：\n"
-    "- lesson 必须具体可执行，不要空泛建议\n"
-    "- situation 要足够具体\n"
-    "- 只输出 JSON，不要任何其他文字"
-)
-
-_ACCOUNT_MANAGER_REFLECT_PROMPT = (
-    "你刚完成了一轮 Brief 解读，并接受了人类专家的审核。回顾这次经历：\n\n"
-    "1. 你初版 Brief 解读漏掉了什么或误解了什么？\n"
-    "2. 人类审核给了什么修改意见？背后的判断依据是什么？\n"
-    "3. 归纳出一条「下次遇到类似客户时的 Brief 解读模式」\n\n"
-    "输出 JSON（只输出 JSON，不要任何其他文字）:\n"
-    "{\n"
-    '  "situation": "某客户类型的 Brief 解读",\n'
-    '  "human_correction": "人类指出的关键修正点",\n'
-    '  "reasoning": "为什么人类会这样修正",\n'
-    '  "action": "你的解读策略",\n'
-    '  "outcome": "是否被人类采纳",\n'
-    '  "lesson": "当客户说 [X] 时，通常意思是 [Y]，需要追问 [Z]",\n'
-    '  "category": "电商大促|新品发布|品牌传播|日常运营",\n'
-    '  "applicable_roles": ["account_manager"]\n'
-    "}\n\n"
-    "要求：\n"
-    "- human_correction 必须具体记录人类的修改点，如果人类直接通过则写「无修改」\n"
-    "- reasoning 要分析人类修正背后的思维方式\n"
-    "- lesson 必须是具体可复用的解读模式，不是「注意沟通」这种废话\n"
-    "- 如果人类未给出修改，也要总结你这次解读中做得好的策略"
-)
-
-_REVIEWER_REFLECT_PROMPT = (
-    "你刚完成了一轮审核工作。回顾这次审核过程，输出一条可复用的审核经验。\n\n"
-    "输出 JSON：\n"
-    "{\n"
-    '  "situation": "某品类/某平台的内容审核场景",\n'
-    '  "violations_found": ["发现的违规类型1", "违规类型2"],\n'
-    '  "action": "你如何基于规则库进行审核",\n'
-    '  "outcome": "审核通过率和整体结果",\n'
-    '  "lesson": "下次文案在撰写这类内容前必须预先检查什么",\n'
-    '  "category": "电商大促|新品发布|品牌传播|日常运营",\n'
-    '  "applicable_roles": ["reviewer", "copywriter"]  // 必须保持此固定值，不要修改\n'
-    "}\n\n"
-    "要求：\n"
-    "- lesson 必须具体到可执行检查项，不要空泛\n"
-    "- violations_found 必须尽量落到具体违规模式\n"
-    "- applicable_roles 固定为 [\"reviewer\", \"copywriter\"]，不允许输出其他值\n"
-    "- 只输出 JSON，不要其他文字"
-)
-
-_COPYWRITER_REFLECT_PROMPT = (
-    "你刚完成了一轮文案撰写。回顾你这次的【对标 + 规则】双轨学习过程：\n\n"
-    "1. 轨道A：你调 search_reference 搜了哪些爆款？共性是什么？你复用了哪些元素？\n"
-    "2. 轨道B：你调 search_knowledge 查了哪些规则？本轮规避了哪些禁用词/平台红线？\n"
-    "3. 对标与规则是否有冲突？你如何化解？\n"
-    "4. 归纳一条「对标 + 规则」融合的可复用套路\n\n"
-    "输出 JSON（只输出 JSON，不要任何其他文字）:\n"
-    "{\n"
-    '  "situation": "某平台某品类的文案撰写场景",\n'
-    '  "reference_pattern": "爆款共性规律（hook/structure/cta 具体模式）",\n'
-    '  "rule_check": "本轮查到的规则红线 + 已规避的禁用词/平台限制",\n'
-    '  "conflict_handling": "对标元素与规则冲突的化解方式（如 hook 里的违规措辞如何合法替代）",\n'
-    '  "action": "你如何融合对标与规则进行创作",\n'
-    '  "outcome": "成稿质量 + 合规自检结果",\n'
-    '  "lesson": "下次撰写同类内容时，先搜 [爆款关键词] 再查 [规则关键词]，套用 [结构]，避免 [具体红线]",\n'
-    '  "category": "电商大促|新品发布|品牌传播|日常运营",\n'
-    '  "applicable_roles": ["copywriter"]\n'
-    "}\n\n"
-    "要求：\n"
-    "- reference_pattern 具体到可模仿的结构骨架，不是空话\n"
-    "- rule_check 必须列出实际命中的规则文件名 + 至少 1 条已规避的违规模式\n"
-    "- conflict_handling 如果本轮无冲突写「无冲突」，但要说明如何确认无冲突\n"
-    "- lesson 必须可操作，覆盖「搜什么 → 查什么 → 怎么写 → 避什么」完整闭环\n"
-    "- 如果本轮未调 search_reference 或 search_knowledge（违规），lesson 必须自我检讨"
-)
-
-_ROLE_REFLECT_PROMPTS: dict[str, str] = {
-    "account_manager": _ACCOUNT_MANAGER_REFLECT_PROMPT,
-    "reviewer": _REVIEWER_REFLECT_PROMPT,
-    "copywriter": _COPYWRITER_REFLECT_PROMPT,
-}
 
 # ── 角色必调工具（代码级硬约束，prompt 偏航时兜底）──
 # 如果 ReAct 结束后这些工具未被调用，post-validation 会注入指令要求 LLM 补全
@@ -632,12 +538,8 @@ class BaseAgent:
             default_headers={"User-Agent": "Mozilla/5.0"},
         )
 
-        # 经验暂存（Hook 蒸馏后自主写入 wiki，也供 Orchestrator 写 Bitable）
-        self._pending_experience: dict | None = None
         # 本次运行注入到 system prompt 的经验条数（Chroma top-K 命中数）
         self._injected_experience_count: int = 0
-        # 标记 Agent 是否已自主完成 wiki 写入
-        self._wiki_written: bool = False
         # 空 turn 计数（防 LLM reasoning 后不产出 tool_use 也不产出 text）
         self._empty_turn_count: int = 0
         # 标记 Agent 是否调用了人机交互工具（ask_human / ask_human_batch）
@@ -1268,32 +1170,6 @@ class BaseAgent:
         # 7. 保存对话历史供 Hook 使用
         self._messages = messages
 
-        # 8. Hook: 自省蒸馏 + 自主写入 wiki（不影响主流程）
-        # 只有白名单角色才执行蒸馏；copywriter / project_manager 无外部验证来源，跳过
-        if self.role_id not in EXPERIENCE_POOL_ROLE_ALLOWLIST:
-            logger.info("[%s] 跳过 Hook 蒸馏（角色不在白名单）", self.soul.name)
-            return final_output
-        try:
-            experience_card = await self._hook_reflect(messages)
-            if experience_card:
-                self._pending_experience = experience_card
-                logger.info(
-                    "[%s] Hook 蒸馏完成: %s",
-                    self.soul.name, experience_card.get("lesson", "")[:80],
-                )
-                self._publish("experience.distilled", {
-                    "role_id": self.role_id,
-                    "category": experience_card.get("category", "未分类"),
-                    "lesson": str(experience_card.get("lesson", ""))[:80],
-                    "applicable_roles": experience_card.get("applicable_roles", []),
-                })
-                # 自主写入本地 wiki
-                await self._self_write_wiki(experience_card, context)
-            else:
-                logger.warning("[%s] Hook 蒸馏失败或解析错误", self.soul.name)
-        except Exception as e:
-            logger.warning("[%s] Hook 异常: %s", self.soul.name, e)
-
         self._publish("agent.completed", {
             "output_length": len(final_output),
         })
@@ -1771,110 +1647,6 @@ class BaseAgent:
 
         return "\n".join(lines)
 
-    async def _hook_reflect(self, messages: list[dict]) -> dict | None:
-        """Hook 自省：回顾 ReAct 过程，蒸馏一条可复用经验。
-
-        按 role_id 使用不同的自省 prompt，让每个角色聚焦自己最有价值的经验维度。
-        """
-        reflect_prompt = _ROLE_REFLECT_PROMPTS.get(self.role_id, _DEFAULT_REFLECT_PROMPT)
-
-        # 构造自省对话：复用 ReAct 历史 + 追加自省指令
-        reflect_messages = messages.copy()
-        reflect_messages.append({"role": "user", "content": reflect_prompt})
-
-        try:
-            resp = await self._llm_call(
-                reflect_messages,
-                with_tools=False,
-                stage="reflect",
-            )
-            raw = resp.choices[0].message.content or ""
-            # 清理可能的 markdown 代码块包裹
-            cleaned = raw.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("\n", 1)[-1]
-            if cleaned.endswith("```"):
-                cleaned = cleaned.rsplit("```", 1)[0]
-            cleaned = cleaned.strip()
-
-            card = json.loads(cleaned)
-            # 字段规范化 + 兜底
-            _VALID_CATEGORIES = {"电商大促", "新品发布", "品牌传播", "日常运营"}
-            card.setdefault("situation", "")
-            card.setdefault("action", "")
-            card.setdefault("outcome", "")
-            card.setdefault("lesson", "")
-            if card.get("category") not in _VALID_CATEGORIES:
-                card["category"] = "未分类"
-            # 确保 applicable_roles 包含当前角色；审核经验还必须反哺文案
-            if not isinstance(card.get("applicable_roles"), list):
-                card["applicable_roles"] = [self.role_id]
-            elif self.role_id not in card["applicable_roles"]:
-                card["applicable_roles"].insert(0, self.role_id)
-            if self.role_id == "reviewer" and "copywriter" not in card["applicable_roles"]:
-                card["applicable_roles"].append("copywriter")
-            logger.info(
-                "[%s] Hook 经验适用角色: %s",
-                self.soul.name, card.get("applicable_roles"),
-            )
-            return card
-        except (json.JSONDecodeError, Exception) as e:
-            logger.warning("[%s] Hook JSON 解析失败: %s", self.soul.name, e)
-            return None
-
-    def _build_wiki_title(self, lesson: str) -> str:
-        """基于规整化 lesson 生成去重友好的 wiki 文件名。
-
-        规整化：移除所有空白 + 非字母数字中文字符，并转小写。
-        - 前 20 字作为人眼可读前缀（保留原始 lesson 里的可见字符，不做规整化）
-        - 规整化全文的 md5 前 8 位作为短指纹，决定唯一性
-        同语义仅标点不同的 lesson 会落到同一 fingerprint → 同文件名 → 覆盖写入。
-        """
-        normalized = re.sub(r"[\s\W_]+", "", lesson).lower()
-        if not normalized:
-            normalized = lesson
-        fingerprint = hashlib.md5(normalized.encode("utf-8")).hexdigest()[:8]
-        human_prefix = lesson[:20].strip() or "经验"
-        return f"{self.role_id}_{human_prefix}_{fingerprint}"
-
-    async def _self_write_wiki(self, card: dict, context: AgentContext) -> None:
-        """Agent 自主将经验卡片写入本地 wiki，实现自检闭环。
-
-        文件命名策略（修复隐患2）：
-          {role_id}_{规整化前20字}_{规整化全文md5前8位}
-        规整化会去掉所有标点/空白并小写，使得"仅标点或空白差异"的同语义 lesson
-        命中同一文件名 → write_wiki 覆盖写入 → 自动去重，不再堆积近重复文件。
-        """
-        category = card.get("category", "未分类")
-        lesson = card.get("lesson", "")
-        if not lesson:
-            return
-
-        # 构造 wiki 内容：SAOL 格式
-        content_parts = []
-        if card.get("situation"):
-            content_parts.append(f"## 场景\n{card['situation']}")
-        if card.get("action"):
-            content_parts.append(f"## 策略\n{card['action']}")
-        if card.get("outcome"):
-            content_parts.append(f"## 结果\n{card['outcome']}")
-        if lesson:
-            content_parts.append(f"## 经验教训\n{lesson}")
-        content_parts.append(f"\n> 来源角色: {self.role_id}")
-
-        title = self._build_wiki_title(lesson)
-
-        try:
-            result = await self._registry.call_tool(
-                "write_wiki",
-                {"category": category, "title": title, "content": "\n\n".join(content_parts)},
-                context,
-            )
-            self._wiki_written = True
-            logger.info("[%s] 自主写入 wiki 完成: %s", self.soul.name, result)
-        except Exception as e:
-            logger.warning("[%s] 自主写入 wiki 失败: %s", self.soul.name, e)
-
     def _build_system_prompt(self, proj, experience_text: str = "") -> str:
         """装配完整的 system prompt。"""
         sections = []
@@ -1975,10 +1747,42 @@ class BaseAgent:
         # RateLimitError 需要更长等待；连接/超时/5xx 用较短退避
         backoff_seconds = [2, 4, 8]
         rate_limit_backoff = [5, 15, 30]
+        approx_chars = self._approx_message_chars(messages)
+        proxy_env = {
+            "http_proxy": os.getenv("http_proxy") or os.getenv("HTTP_PROXY") or "",
+            "https_proxy": os.getenv("https_proxy") or os.getenv("HTTPS_PROXY") or "",
+            "no_proxy": os.getenv("no_proxy") or os.getenv("NO_PROXY") or "",
+        }
+        total_timeout = LLM_TOTAL_TIMEOUT_SECONDS if LLM_TOTAL_TIMEOUT_SECONDS > 0 else None
+        started_at = asyncio.get_running_loop().time()
+
+        self._publish("llm.started", {
+            "stage": stage,
+            "iteration": iteration,
+            "model": LLM_MODEL,
+            "base_url": LLM_BASE_URL,
+            "message_count": len(messages),
+            "approx_chars": approx_chars,
+            "timeout_seconds": LLM_TIMEOUT_SECONDS,
+            "total_timeout_seconds": total_timeout or 0,
+            "proxy": proxy_env,
+        }, round_num=iteration or 0)
 
         for attempt in range(1, max_attempts + 1):
             try:
-                response = await self._llm.chat.completions.create(**kwargs)
+                if total_timeout is not None:
+                    elapsed = asyncio.get_running_loop().time() - started_at
+                    remaining_timeout = total_timeout - elapsed
+                    if remaining_timeout <= 0:
+                        raise asyncio.TimeoutError(
+                            f"LLM total timeout exceeded ({total_timeout}s)"
+                        )
+                    response = await asyncio.wait_for(
+                        self._llm.chat.completions.create(**kwargs),
+                        timeout=remaining_timeout,
+                    )
+                else:
+                    response = await self._llm.chat.completions.create(**kwargs)
                 if response.usage:
                     from memory.cost_tracker import cost_tracker
                     cost_tracker.record(
@@ -1990,19 +1794,23 @@ class BaseAgent:
                         completion_tokens=response.usage.completion_tokens or 0,
                         iteration=iteration,
                     )
+                self._publish("llm.completed", {
+                    "stage": stage,
+                    "iteration": iteration,
+                    "attempt": attempt,
+                    "model": LLM_MODEL,
+                    "prompt_tokens": (response.usage.prompt_tokens if response.usage else 0) or 0,
+                    "completion_tokens": (response.usage.completion_tokens if response.usage else 0) or 0,
+                    "total_tokens": (response.usage.total_tokens if response.usage else 0) or 0,
+                }, round_num=iteration or 0)
                 return response
-            except (APIConnectionError, APITimeoutError, InternalServerError, RateLimitError) as exc:
+            except (asyncio.TimeoutError, APIConnectionError, APITimeoutError, InternalServerError, RateLimitError) as exc:
                 is_last = attempt == max_attempts
                 is_rate_limit = isinstance(exc, RateLimitError)
-                proxy_env = {
-                    "http_proxy": os.getenv("http_proxy") or os.getenv("HTTP_PROXY") or "",
-                    "https_proxy": os.getenv("https_proxy") or os.getenv("HTTPS_PROXY") or "",
-                    "no_proxy": os.getenv("no_proxy") or os.getenv("NO_PROXY") or "",
-                }
                 level = logger.error if is_last else logger.warning
                 level(
                     "[%s] LLM %s stage=%s iteration=%s attempt=%d/%d model=%s base_url=%s "
-                    "timeout=%ss sdk_retries=%s proxy=%s messages=%d approx_chars=%d err=%s",
+                    "timeout=%ss total_timeout=%s sdk_retries=%s proxy=%s messages=%d approx_chars=%d err=%s",
                     self.soul.name,
                     type(exc).__name__,
                     stage,
@@ -2012,12 +1820,23 @@ class BaseAgent:
                     LLM_MODEL,
                     LLM_BASE_URL,
                     LLM_TIMEOUT_SECONDS,
+                    total_timeout,
                     LLM_MAX_RETRIES,
                     proxy_env,
                     len(messages),
-                    self._approx_message_chars(messages),
+                    approx_chars,
                     exc,
                 )
+                self._publish("llm.failed" if is_last else "llm.retrying", {
+                    "stage": stage,
+                    "iteration": iteration,
+                    "attempt": attempt,
+                    "max_attempts": max_attempts,
+                    "model": LLM_MODEL,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "total_timeout_seconds": total_timeout or 0,
+                }, round_num=iteration or 0)
                 if is_last:
                     raise
                 backoff = rate_limit_backoff if is_rate_limit else backoff_seconds

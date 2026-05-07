@@ -90,4 +90,7 @@ async def test_copywriter_reports_missing_required_tools_in_unit_result(
     )
 
     assert result.output == "draft without checks"
-    assert result.missing_required_tools == ["search_reference", "search_knowledge"]
+    # copywriter 必调工具：search_reference + search_knowledge + write_content（三项全缺）
+    assert sorted(result.missing_required_tools) == sorted(
+        ["search_reference", "search_knowledge", "write_content"]
+    )

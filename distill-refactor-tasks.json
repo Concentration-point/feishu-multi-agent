@@ -1,0 +1,216 @@
+{
+  "phase": "经验蒸馏重构",
+  "goal": "消除 Agent 自评近因效应：将蒸馏时机从「ReAct 结束后 Agent 自省」改为「Orchestrator 检测外部反馈信号 → 新开干净 LLM 调用」。只保留两条蒸馏链路：链路A（审核驳回反馈 → reviewer/copywriter 经验）、链路B（人类修改意见 → account_manager 经验）。其余角色和情况一律不蒸馏。",
+  "rules": "每次只取一个任务执行，完成后对照验收标准自检，报告结果后等待确认再取下一个。禁止提前执行依赖尚未完成的任务。不要改动 _settle_experiences 后半段（质量检查 → 双写 → 桶合并 → 事件发布）。",
+  "tasks": [
+    {
+      "id": "DIST-01",
+      "title": "新增 _distill_experience 方法 + 链路A/B 专属 prompt 常量",
+      "description": "在 orchestrator.py 中新增两个模块级 prompt 常量和一个 async 方法。\n\n1. 在文件顶部（import 块之后）新增两个 prompt 常量：\n   _DISTILL_PROMPT_CHAIN_A：针对审核驳回反馈。包含 {task_summary} 和 {feedback_text} 两个占位符。要求 LLM 产出含 situation / violations_found / action / outcome / lesson / category / applicable_roles 字段的 JSON，applicable_roles 固定为 [\"reviewer\", \"copywriter\"]，不允许修改。\n   _DISTILL_PROMPT_CHAIN_B：针对人类修改意见。包含 {task_summary} 和 {feedback_text} 两个占位符。要求 LLM 产出含 situation / human_correction / reasoning / action / outcome / lesson / category / applicable_roles 字段的 JSON，applicable_roles 固定为 [\"account_manager\"]，不允许修改。\n\n2. 在 Orchestrator.__init__ 中新增 AsyncOpenAI 客户端：self._llm = AsyncOpenAI(model=LLM_MODEL, base_url=LLM_BASE_URL, api_key=LLM_API_KEY, timeout=LLM_TIMEOUT_SECONDS)。需要从 config 导入这些常量（与 base.py 相同来源）。\n\n3. 新增方法 _distill_experience(task_summary: str, feedback_text: str, applicable_roles: list[str]) -> dict | None，做以下事情：\n   a. 根据 applicable_roles 选择对应 prompt（含 reviewer 用链路A，否则链路B）\n   b. 用 task_summary 和 feedback_text 填充 prompt 占位符\n   c. 新开 LLM 调用：messages 只有 [{\"role\": \"user\", \"content\": <filled_prompt>}]，不传任何 ReAct 历史，with_tools=False\n   d. 解析 JSON，做字段规范化（setdefault 兜底、category 非法时改为「未分类」、applicable_roles 类型检查）\n   e. 强制覆盖 applicable_roles 为传入的参数值（不允许 LLM 自行修改）\n   f. 解析失败时 logger.warning 并返回 None，不抛异常",
+      "files": [
+        "orchestrator.py"
+      ],
+      "depends_on": [],
+      "acceptance": [
+        "grep '_DISTILL_PROMPT_CHAIN_A' orchestrator.py 有输出",
+        "grep '_DISTILL_PROMPT_CHAIN_B' orchestrator.py 有输出",
+        "链路A prompt 中包含 violations_found 字段声明",
+        "链路A prompt 中明确说明 applicable_roles 固定为 [\"reviewer\", \"copywriter\"]",
+        "链路B prompt 中包含 human_correction 字段声明",
+        "链路B prompt 中明确说明 applicable_roles 固定为 [\"account_manager\"]",
+        "grep 'async def _distill_experience' orchestrator.py 有输出",
+        "_distill_experience 参数列表不含 messages（无 ReAct 历史传入）",
+        "_distill_experience 内 messages 列表只有一条 user 消息（无 system、无历史）",
+        "_distill_experience 解析失败时返回 None 而非抛异常",
+        "python -m py_compile orchestrator.py 无错误"
+      ],
+      "status": "done",
+      "estimated_minutes": 25
+    },
+    {
+      "id": "DIST-02",
+      "title": "新增 _distill_from_feedback 方法（两条链路触发逻辑）",
+      "description": "在 orchestrator.py 中新增 _distill_from_feedback(project_name: str) -> list[dict] async 方法。\n\n链路A（审核反馈 → 文案经验）：\n  - 调用 ContentMemory().list_by_project(project_name) 获取全部内容行\n  - 过滤条件：row.review_status in ('需修改', '驳回') AND row.review_feedback（非空字符串）\n  - 若有命中行：将所有 review_feedback 用 \\n\\n 拼接为 feedback_text\n  - task_summary = f\"项目「{project_name}」内容审核，{len(rejected_rows)} 条被驳回\"\n  - 调用 await self._distill_experience(task_summary, feedback_text, ['reviewer', 'copywriter'])\n  - 若返回非 None：results.append({'role_id': 'reviewer', 'card': card})\n\n链路B（人类反馈 → 客户经理经验）：\n  - 调用 await self._pm.load() 获取项目记录（ProjectMemory 已在 Orchestrator 中有 self._pm）\n  - 检查 proj.human_feedback（memory/project.py:49 确认的属性名）是否非空\n  - 若非空：task_summary = f\"项目「{project_name}」Brief 解读，人类审核给出修改意见\"\n  - 调用 await self._distill_experience(task_summary, proj.human_feedback.strip(), ['account_manager'])\n  - 若返回非 None：results.append({'role_id': 'account_manager', 'card': card})\n\n两条链路各自用 try/except 包裹，异常时 logger.warning 并 continue，不影响另一条。\n返回 results（可能为空 list、1 条或 2 条），永远不返回 None。",
+      "files": [
+        "orchestrator.py"
+      ],
+      "depends_on": [
+        "DIST-01"
+      ],
+      "acceptance": [
+        "grep 'async def _distill_from_feedback' orchestrator.py 有输出",
+        "链路A过滤条件：review_status 判断包含 '需修改' 和 '驳回'",
+        "链路A过滤条件：review_feedback 非空检查",
+        "链路B读取的字段是 proj.human_feedback（与 memory/project.py:49 一致）",
+        "链路A产出的 role_id 为 'reviewer'",
+        "链路B产出的 role_id 为 'account_manager'",
+        "两条链路各自有独立 try/except",
+        "函数无反馈时返回 [] 而非 None",
+        "python -m py_compile orchestrator.py 无错误"
+      ],
+      "status": "done",
+      "estimated_minutes": 25
+    },
+    {
+      "id": "DIST-03",
+      "title": "重写 _settle_experiences 入口：接入 _distill_from_feedback + 简化置信度",
+      "description": "修改 orchestrator.py 的 _settle_experiences 方法（当前 line 1744）。\n\n修改点（只改前半段，不动后半段的质量检查→双写→桶合并→事件发布）：\n\n1. 签名变更：\n   旧：async def _settle_experiences(self, pending: list[dict], project_name: str, pass_rate: float | None) -> None\n   新：async def _settle_experiences(self, project_name: str, pass_rate: float | None) -> None\n\n2. 方法体第一行改为：\n   pending = await self._distill_from_feedback(project_name)\n\n3. 去重 key 从 (role_id, platform) 改为 role_id：\n   旧：deduped[(item['role_id'], platform)] = item\n   新：deduped[item['role_id']] = item\n   （新的 pending 条目无 task_filter，platform 不再需要）\n\n4. 删除 knowledge_cited 计算块（约 15 行，从 'knowledge_cited = False' 到 break 的整段）\n\n5. 删除 no_rework 赋值（1 行）\n\n6. 删除 _calc_confidence 调用，改为：confidence = 0.85\n\n7. 删除 agent_ref 相关：\n   - 删除 agent_ref: BaseAgent | None = item.get('agent')\n   - 删除 _wiki_written 判断：去掉 if not getattr(agent_ref, '_wiki_written', False)，改为无条件执行 wiki_saved = await em.save_to_wiki(card, confidence)\n\n8. 保留不变（绝对不动）：\n   - EXPERIENCE_POOL_ROLE_ALLOWLIST 白名单过滤\n   - confidence < EXPERIENCE_CONFIDENCE_THRESHOLD 阈值门控\n   - em.save_experience(card, confidence, project_name)\n   - em.optimize_bucket(optimize_role, category, ...)\n   - 所有 7 种 self._publish('experience.*', ...) 事件发布\n   - 统计输出（print 那段）",
+      "files": [
+        "orchestrator.py"
+      ],
+      "depends_on": [
+        "DIST-02"
+      ],
+      "acceptance": [
+        "_settle_experiences 签名只有 project_name 和 pass_rate，不含 pending 参数",
+        "方法体第一个有效语句是 pending = await self._distill_from_feedback(project_name)",
+        "grep 'knowledge_cited' orchestrator.py 在 _settle_experiences 函数范围内无匹配",
+        "grep 'agent_ref' orchestrator.py 在 _settle_experiences 函数范围内无匹配",
+        "grep 'confidence = 0.85' orchestrator.py 有输出",
+        "EXPERIENCE_POOL_ROLE_ALLOWLIST 白名单判断仍在 _settle_experiences 内",
+        "EXPERIENCE_CONFIDENCE_THRESHOLD 阈值判断仍在 _settle_experiences 内",
+        "7 种 experience.* 事件（settle_started/scored/merging/merged/saved）的 _publish 调用仍在方法内",
+        "python -m py_compile orchestrator.py 无错误"
+      ],
+      "status": "done",
+      "estimated_minutes": 30
+    },
+    {
+      "id": "DIST-04",
+      "title": "删除 Orchestrator 4 个收集点 + 更新调用入口",
+      "description": "在 orchestrator.py 中做以下删除和更新：\n\n删除 4 个 _pending_experience 收集点（每个模式都是 if agent and agent._pending_experience: pending_experiences.append(...)）：\n  1. 常规阶段（约 line 304-311）：if agent and agent._pending_experience 块\n  2. copywriter 退化路径（约 line 598-604）：if agent and agent._pending_experience 块\n  3. fan-out 并行收集（约 line 725-731）：for platform in group_names 循环里的 if ag and ag._pending_experience 块\n  4. fan-out 重试收集（约 line 797-803）：if retry_agent._pending_experience 块\n\n删除 pending_experiences 变量：\n  - 删除 pending_experiences: list[dict] = [] 初始化行\n  - 删除 fan-out 函数中 pending_experiences 的初始化和 extend 调用\n\n更新调用入口（约 line 523）：\n  旧：await self._settle_experiences(pending_experiences, project_name, pass_rate)\n  新：await self._settle_experiences(project_name, pass_rate)\n\n更新 _append_evolution_log 调用（约 line 524）：\n  旧：await self._append_evolution_log(project_name, project_type, pass_rate, pending_experiences)\n  新：await self._append_evolution_log(project_name, project_type, pass_rate)\n  （_append_evolution_log 的 pending_experiences 参数有默认值 None，传参去掉即可；experiences_injected 将为 0，可接受）\n\n注意：fan-out 函数返回 tuple[StageResult, list[dict]]，第二个元素是 experiences list。删除收集点后，fan-out 函数应改为返回 tuple[StageResult, list]（返回空 list），调用方的 fanout_experiences.extend 行也要删除。仔细检查 fan-out 返回值的所有使用方。",
+      "files": [
+        "orchestrator.py"
+      ],
+      "depends_on": [
+        "DIST-03"
+      ],
+      "acceptance": [
+        "grep '_pending_experience' orchestrator.py 无输出",
+        "grep 'pending_experiences' orchestrator.py 无输出（或仅在已删的注释中）",
+        "_settle_experiences 调用行不含 pending_experiences 参数",
+        "_append_evolution_log 调用行不含 pending_experiences 参数",
+        "fan-out 相关的 extend/append 收集逻辑已全部删除",
+        "python -m py_compile orchestrator.py 无错误",
+        "python -c \"from orchestrator import Orchestrator\" 无 ImportError"
+      ],
+      "status": "done",
+      "estimated_minutes": 20
+    },
+    {
+      "id": "DIST-05",
+      "title": "删除 BaseAgent 全部反思基础设施",
+      "description": "在 agents/base.py 中做以下删除（此时 orchestrator.py 已不再读取 _pending_experience，删除安全）：\n\n1. 删除 4 个 prompt 常量 + dict（lines 46-135）：\n   _DEFAULT_REFLECT_PROMPT、_ACCOUNT_MANAGER_REFLECT_PROMPT、\n   _REVIEWER_REFLECT_PROMPT、_COPYWRITER_REFLECT_PROMPT、_ROLE_REFLECT_PROMPTS\n\n2. 删除 __init__ 属性（line 636）：self._pending_experience: dict | None = None\n\n3. 删除 __init__ 属性（line 640）：self._wiki_written: bool = False\n\n4. 删除 run() 中的 Hook 调用块（lines 1271-1294）：\n   从注释 '# 8. Hook: 自省蒸馏' 开始，到 except Exception as e: 及其 logger 行结束的整段\n   注意保留此段之后的 return final_output\n\n5. 删除方法 _hook_reflect（lines 1774-1823）\n\n6. 删除方法 _build_wiki_title（lines 1825-1838）\n\n7. 删除方法 _self_write_wiki（lines 1840 起，到下一个方法开始前）\n\n8. 删除 EXPERIENCE_POOL_ROLE_ALLOWLIST 的 import（如果只在被删代码中使用；先 grep 确认无其他使用点再删）\n\n保留不动：\n   - self._injected_experience_count: int = 0（用于经验加载计数，与蒸馏无关）\n   - 所有 get_experience 工具调用相关逻辑",
+      "files": [
+        "agents/base.py"
+      ],
+      "depends_on": [
+        "DIST-04"
+      ],
+      "acceptance": [
+        "grep '_hook_reflect' agents/base.py 无输出",
+        "grep '_pending_experience' agents/base.py 无输出",
+        "grep '_self_write_wiki' agents/base.py 无输出",
+        "grep '_build_wiki_title' agents/base.py 无输出",
+        "grep '_ROLE_REFLECT_PROMPTS' agents/base.py 无输出",
+        "grep '_DEFAULT_REFLECT_PROMPT' agents/base.py 无输出",
+        "grep '_wiki_written' agents/base.py 无输出",
+        "grep '_injected_experience_count' agents/base.py 有输出（确认保留）",
+        "python -m py_compile agents/base.py 无错误"
+      ],
+      "status": "done",
+      "estimated_minutes": 20
+    },
+    {
+      "id": "DIST-06",
+      "title": "清理引用已删 BaseAgent API 的测试和脚本",
+      "description": "更新以下文件（只删除涉及已删 API 的部分，不动其他逻辑）：\n\n1. tests/test_experience.py：\n   - 删除 test_hook_reflect 函数（line 197 起，含其所有 helper 和 assert）\n   - 检查文件其他位置是否有 agent._pending_experience 的 assert，有则删除\n   - 检查 import 列表中是否有从 base 导入 _ROLE_REFLECT_PROMPTS 等，有则删除\n\n2. tests/test_module1_module2_combo.py：\n   - 删除 lines 138-145（_hook_reflect 源码检查逻辑）\n   - 删除 line 27：from agents.base import _ROLE_REFLECT_PROMPTS（以及相关 import）\n   - 若删除后某个检查点函数体为空，加 pass 或删除整个检查点，保持文件语法正确\n\n3. scripts/selfcheck_orchestrator_red_flag.py：\n   - 删除 line 20：self._pending_experience = None\n   - 检查该脚本中是否有其他 _pending_experience 引用，有则一并删除\n\n每个文件修改后立即运行 python -m py_compile <file> 确认语法正确。",
+      "files": [
+        "tests/test_experience.py",
+        "tests/test_module1_module2_combo.py",
+        "scripts/selfcheck_orchestrator_red_flag.py"
+      ],
+      "depends_on": [
+        "DIST-05"
+      ],
+      "acceptance": [
+        "grep '_hook_reflect' tests/ -r 无输出",
+        "grep '_ROLE_REFLECT_PROMPTS' tests/ -r 无输出",
+        "grep '_pending_experience' scripts/ -r 无输出",
+        "python -m py_compile tests/test_experience.py 无错误",
+        "python -m py_compile tests/test_module1_module2_combo.py 无错误",
+        "python -m py_compile scripts/selfcheck_orchestrator_red_flag.py 无错误",
+        "pytest tests/test_experience.py -x -q 通过（排除需要真实 LLM 的标记）",
+        "pytest tests/test_module1_module2_combo.py -x -q 通过"
+      ],
+      "status": "done",
+      "estimated_minutes": 20
+    },
+    {
+      "id": "DIST-07",
+      "title": "清理 fan-out 和动态路由测试中的 _pending_experience mock",
+      "description": "更新以下测试文件中的 mock 对象（mock 类里的属性要与真实类保持一致）：\n\n1. tests/test_copywriter_fanout.py：\n   - 删除 line 90：self._pending_experience = None（mock 类属性）\n   - 删除 line 123：self._pending_experience = behavior.get('experience') or {...}\n   - 删除 test_all_pending_experiences_collected 函数（line 345 起，含 print('[PASS]...) 行）\n   - 删除 line 443 处 test_all_pending_experiences_collected() 在 asyncio.run 列表中的调用\n   - 检查 mock 类的其他属性和方法是否仍被测试用到，只删 _pending_experience 相关，不动其他\n\n2. tests/test_dynamic_routing.py：\n   - 删除 line 142：self._pending_experience = None（mock 类属性）\n\n每个文件修改后运行 python -m py_compile <file> 确认语法。",
+      "files": [
+        "tests/test_copywriter_fanout.py",
+        "tests/test_dynamic_routing.py"
+      ],
+      "depends_on": [
+        "DIST-05"
+      ],
+      "acceptance": [
+        "grep '_pending_experience' tests/test_copywriter_fanout.py 无输出",
+        "grep '_pending_experience' tests/test_dynamic_routing.py 无输出",
+        "grep 'test_all_pending_experiences_collected' tests/test_copywriter_fanout.py 无输出",
+        "python -m py_compile tests/test_copywriter_fanout.py 无错误",
+        "python -m py_compile tests/test_dynamic_routing.py 无错误",
+        "pytest tests/test_copywriter_fanout.py -x -q 通过",
+        "pytest tests/test_dynamic_routing.py -x -q 通过"
+      ],
+      "status": "done",
+      "estimated_minutes": 15
+    },
+    {
+      "id": "DIST-08",
+      "title": "更新 test_experience_evolution.py 适配新的 _settle_experiences 接口",
+      "description": "tests/test_experience_evolution.py 大量测试直接调用 o._settle_experiences(pending, project_name, pass_rate)，其中 pending 是手工构造的 list。需要全部更新为新接口。\n\n更新模式（对每个测试函数）：\n  1. 在调用 _settle_experiences 之前，用 unittest.mock.patch 或 monkeypatch 对 _distill_from_feedback 做 mock：\n     mock 返回值 = 原来手工构造的 pending list\n     注意：新格式的 pending 条目无 'agent' key 和 'task_filter' key，只有 'role_id' 和 'card'\n  2. 调用改为：await o._settle_experiences(project_name, pass_rate)\n     （去掉 pending 位置参数）\n  3. 去重逻辑 key 已从 (role_id, platform) 改为 role_id（DIST-03 已改）：\n     检查是否有测试依赖 platform 去重行为（如同一 role_id 不同 platform 的两条期望都保留），\n     如有，更新期望值（新逻辑下同一 role_id 只保留最后一条）\n\nline 328 测试「(role_id, platform) 去重逻辑」的注释和断言要更新为「role_id 去重逻辑」。\n\n注意保留测试的核心验证意图（如「置信度不足时跳过」「save_experience 被调用」「事件发布顺序」），只改接口，不改验证逻辑。",
+      "files": [
+        "tests/test_experience_evolution.py"
+      ],
+      "depends_on": [
+        "DIST-03"
+      ],
+      "acceptance": [
+        "tests/test_experience_evolution.py 中所有 _settle_experiences 调用不含 pending 位置参数",
+        "grep '_distill_from_feedback' tests/test_experience_evolution.py 有输出（被 mock）",
+        "mock 的 pending 条目格式只含 role_id 和 card，无 agent 和 task_filter",
+        "line 328 测试的去重描述已更新为 role_id 去重",
+        "python -m py_compile tests/test_experience_evolution.py 无错误",
+        "pytest tests/test_experience_evolution.py -x -q 通过"
+      ],
+      "status": "done",
+      "estimated_minutes": 25
+    },
+    {
+      "id": "DIST-09",
+      "title": "全量 pytest 验证 + 关键路径代码审阅",
+      "description": "最终验证任务，确保重构端到端正确。\n\n1. 运行全量测试（排除需要真实 LLM/飞书环境的 live 测试）：\n   pytest tests/ -x -q --ignore=tests/test_agent_live.py --ignore=tests/test_copywriter_live.py\n   贴出完整输出，确认 0 failures 0 errors。\n\n2. 代码审阅 _distill_from_feedback（逐点检查）：\n   a. 链路A：review_status in ('需修改', '驳回') 且 review_feedback 非空\n   b. 链路B：proj.human_feedback 非空\n   c. 两条链路各自有独立 try/except\n   d. 无反馈时返回 []\n\n3. 代码审阅 _settle_experiences（逐点检查）：\n   a. 第一行是 pending = await self._distill_from_feedback(project_name)\n   b. confidence = 0.85（无 4 因子公式）\n   c. 无 agent_ref 引用\n   d. wiki_saved 无条件执行（无 _wiki_written 判断）\n\n4. 全局残留扫描：\n   grep -r '_pending_experience' agents/ orchestrator.py tests/ scripts/\n   grep -r '_hook_reflect' agents/ tests/\n   grep 'pending_experiences' orchestrator.py\n   以上均应无输出。",
+      "files": [],
+      "depends_on": [
+        "DIST-06",
+        "DIST-07",
+        "DIST-08"
+      ],
+      "acceptance": [
+        "pytest tests/ -x -q（排除 live 测试）输出 0 failures 0 errors，贴出输出截图或文字",
+        "grep '_pending_experience' agents/base.py orchestrator.py 无输出",
+        "grep 'pending_experiences' orchestrator.py 无输出",
+        "grep 'agent_ref' orchestrator.py（在 _settle_experiences 函数范围内）无输出",
+        "grep 'confidence = 0.85' orchestrator.py 有输出",
+        "grep 'async def _distill_from_feedback' orchestrator.py 有输出",
+        "grep 'async def _distill_experience' orchestrator.py 有输出"
+      ],
+      "status": "done",
+      "estimated_minutes": 15
+    }
+  ]
+}

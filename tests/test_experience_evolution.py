@@ -2,10 +2,10 @@
 
 验证点：
 1. orchestrator _settle_experiences 发布 experience.* 事件
-2. 置信度计算正确性
+2. 外部反馈驱动的固定置信度（0.85）
 3. 事件 payload 结构完整
 4. 各阶段事件顺序（scored → merging → merged → saved → settle_completed）
-5. 低置信度经验跳过逻辑
+5. 白名单过滤与置信度门控
 6. settle_completed 汇总数据一致性
 """
 
@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
-# ── 置信度计算 ──
+# ── 置信度计算（_calc_confidence 仍存在，保留验证）──
 
 class TestCalcConfidence:
     """_calc_confidence 静态方法测试。"""
@@ -53,7 +53,6 @@ class TestCalcConfidence:
 
     def test_threshold_boundary(self):
         from config import EXPERIENCE_CONFIDENCE_THRESHOLD
-        # 白名单内角色 no_rework 恒为 True；此用例验证 no_rework=False 会给出低于阈值的分数
         score = self.calc(pass_rate=0.75, task_completed=True, no_rework=False, knowledge_cited=True)
         # 0.4*0.75 + 0.3*1 + 0.2*0 + 0.1*1 = 0.3+0.3+0+0.1 = 0.7
         assert score < EXPERIENCE_CONFIDENCE_THRESHOLD
@@ -85,20 +84,20 @@ class TestSettleExperienceEvents:
                 "category": category,
                 "applicable_roles": [role_id],
             },
-            "agent": None,
         }
 
     @pytest.mark.asyncio
     async def test_settle_started_event(self, orch):
         o, bus = orch
         pending = [self._make_pending("account_manager")]
-        with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
-            with patch("orchestrator.ExperienceManager") as MockEM:
-                em = MockEM.return_value
-                em.check_dedup = AsyncMock(return_value=[])
-                em.save_experience = AsyncMock(return_value="recEXP001")
-                em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
-                await o._settle_experiences(pending, "测试项目", 0.8)
+        with patch.object(o, '_distill_from_feedback', AsyncMock(return_value=pending)):
+            with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
+                with patch("orchestrator.ExperienceManager") as MockEM:
+                    em = MockEM.return_value
+                    em.check_dedup = AsyncMock(return_value=[])
+                    em.save_experience = AsyncMock(return_value="recEXP001")
+                    em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
+                    await o._settle_experiences("测试项目", 0.8)
 
         events = bus.get_history("recTEST001")
         started = [e for e in events if e["event_type"] == "experience.settle_started"]
@@ -109,21 +108,16 @@ class TestSettleExperienceEvents:
     @pytest.mark.asyncio
     async def test_scored_event_payload(self, orch):
         o, bus = orch
-        from dataclasses import dataclass
-        @dataclass
-        class FakeResult:
-            ok: bool
-            role_id: str
-        o.stage_results = [FakeResult(ok=True, role_id="account_manager")]
         pending = [self._make_pending("account_manager")]
 
-        with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
-            with patch("orchestrator.ExperienceManager") as MockEM:
-                em = MockEM.return_value
-                em.check_dedup = AsyncMock(return_value=[])
-                em.save_experience = AsyncMock(return_value="recEXP001")
-                em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
-                await o._settle_experiences(pending, "测试项目", 0.8)
+        with patch.object(o, '_distill_from_feedback', AsyncMock(return_value=pending)):
+            with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
+                with patch("orchestrator.ExperienceManager") as MockEM:
+                    em = MockEM.return_value
+                    em.check_dedup = AsyncMock(return_value=[])
+                    em.save_experience = AsyncMock(return_value="recEXP001")
+                    em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
+                    await o._settle_experiences("测试项目", 0.8)
 
         events = bus.get_history("recTEST001")
         scored = [e for e in events if e["event_type"] == "experience.scored"]
@@ -133,28 +127,22 @@ class TestSettleExperienceEvents:
         assert isinstance(p["confidence"], float)
         assert isinstance(p["threshold"], float)
         assert "factors" in p
-        assert "pass_rate" in p["factors"]
-        assert "task_completed" in p["factors"]
+        assert "external_feedback" in p["factors"]
         assert "category" in p
 
     @pytest.mark.asyncio
     async def test_saved_event_on_success(self, orch):
         o, bus = orch
-        from dataclasses import dataclass
-        @dataclass
-        class FakeResult:
-            ok: bool
-            role_id: str
-        o.stage_results = [FakeResult(ok=True, role_id="account_manager")]
         pending = [self._make_pending("account_manager")]
 
-        with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
-            with patch("orchestrator.ExperienceManager") as MockEM:
-                em = MockEM.return_value
-                em.check_dedup = AsyncMock(return_value=[])
-                em.save_experience = AsyncMock(return_value="recEXP001")
-                em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
-                await o._settle_experiences(pending, "测试项目", 0.8)
+        with patch.object(o, '_distill_from_feedback', AsyncMock(return_value=pending)):
+            with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
+                with patch("orchestrator.ExperienceManager") as MockEM:
+                    em = MockEM.return_value
+                    em.check_dedup = AsyncMock(return_value=[])
+                    em.save_experience = AsyncMock(return_value="recEXP001")
+                    em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
+                    await o._settle_experiences("测试项目", 0.8)
 
         events = bus.get_history("recTEST001")
         saved = [e for e in events if e["event_type"] == "experience.saved"]
@@ -165,53 +153,43 @@ class TestSettleExperienceEvents:
         assert p["wiki_saved"] is True
 
     @pytest.mark.asyncio
-    async def test_skipped_no_saved_event(self, orch):
-        """低置信度经验不发 saved 事件。"""
+    async def test_whitelist_role_always_confident(self, orch):
+        """外部反馈驱动的经验置信度固定 0.85，始终高于阈值，白名单角色始终落盘。"""
         o, bus = orch
-        # stage_results 为空 → task_completed=False → 置信度更低
         pending = [self._make_pending("account_manager")]
 
-        with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
-            with patch("orchestrator.ExperienceManager") as MockEM:
-                em = MockEM.return_value
-                em.check_dedup = AsyncMock(return_value=[])
-                em.save_experience = AsyncMock(return_value=None)
-                em.save_to_wiki = AsyncMock(return_value=None)
-                # pass_rate=0 → 置信度极低
-                await o._settle_experiences(pending, "测试项目", 0.0)
+        with patch.object(o, '_distill_from_feedback', AsyncMock(return_value=pending)):
+            with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
+                with patch("orchestrator.ExperienceManager") as MockEM:
+                    em = MockEM.return_value
+                    em.check_dedup = AsyncMock(return_value=[])
+                    em.save_experience = AsyncMock(return_value="recEXP001")
+                    em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
+                    await o._settle_experiences("测试项目", 0.0)
 
         events = bus.get_history("recTEST001")
         scored = [e for e in events if e["event_type"] == "experience.scored"]
         saved = [e for e in events if e["event_type"] == "experience.saved"]
-        # 应有 scored 但 passed=False，无 saved
         assert len(scored) == 1
-        assert scored[0]["payload"]["passed"] is False
-        assert len(saved) == 0
+        assert scored[0]["payload"]["passed"] is True
+        assert len(saved) == 1
 
     @pytest.mark.asyncio
     async def test_settle_completed_summary(self, orch):
         o, bus = orch
-        from dataclasses import dataclass
-        @dataclass
-        class FakeResult:
-            ok: bool
-            role_id: str
-        o.stage_results = [
-            FakeResult(ok=True, role_id="account_manager"),
-            FakeResult(ok=True, role_id="strategist"),
-        ]
         pending = [
             self._make_pending("account_manager"),
-            self._make_pending("strategist"),
+            self._make_pending("reviewer"),
         ]
 
-        with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
-            with patch("orchestrator.ExperienceManager") as MockEM:
-                em = MockEM.return_value
-                em.check_dedup = AsyncMock(return_value=[])
-                em.save_experience = AsyncMock(return_value="recEXP001")
-                em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
-                await o._settle_experiences(pending, "测试项目", 0.8)
+        with patch.object(o, '_distill_from_feedback', AsyncMock(return_value=pending)):
+            with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
+                with patch("orchestrator.ExperienceManager") as MockEM:
+                    em = MockEM.return_value
+                    em.check_dedup = AsyncMock(return_value=[])
+                    em.save_experience = AsyncMock(return_value="recEXP001")
+                    em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
+                    await o._settle_experiences("测试项目", 0.8)
 
         events = bus.get_history("recTEST001")
         completed = [e for e in events if e["event_type"] == "experience.settle_completed"]
@@ -226,30 +204,25 @@ class TestSettleExperienceEvents:
     async def test_merge_events(self, orch):
         """当触发合并时，应发 merging + merged 事件。"""
         o, bus = orch
-        from dataclasses import dataclass
-        @dataclass
-        class FakeResult:
-            ok: bool
-            role_id: str
-        o.stage_results = [FakeResult(ok=True, role_id="account_manager")]
         pending = [self._make_pending("account_manager")]
 
-        with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
-            with patch("orchestrator.ExperienceManager") as MockEM:
-                em = MockEM.return_value
-                em.save_experience = AsyncMock(return_value="recEXPMerged")
-                em.save_to_wiki = AsyncMock(return_value="wiki/merged.md")
-                em.optimize_bucket = AsyncMock(return_value={
-                    "role_id": "account_manager",
-                    "category": "电商大促",
-                    "before": 4,
-                    "after_dedup": 4,
-                    "duplicate_pairs": 0,
-                    "dedup_deleted": 0,
-                    "merged_deleted": 4,
-                    "merged_created": 1,
-                })
-                await o._settle_experiences(pending, "测试项目", 0.8)
+        with patch.object(o, '_distill_from_feedback', AsyncMock(return_value=pending)):
+            with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
+                with patch("orchestrator.ExperienceManager") as MockEM:
+                    em = MockEM.return_value
+                    em.save_experience = AsyncMock(return_value="recEXPMerged")
+                    em.save_to_wiki = AsyncMock(return_value="wiki/merged.md")
+                    em.optimize_bucket = AsyncMock(return_value={
+                        "role_id": "account_manager",
+                        "category": "电商大促",
+                        "before": 4,
+                        "after_dedup": 4,
+                        "duplicate_pairs": 0,
+                        "dedup_deleted": 0,
+                        "merged_deleted": 4,
+                        "merged_created": 1,
+                    })
+                    await o._settle_experiences("测试项目", 0.8)
 
         events = bus.get_history("recTEST001")
         merging = [e for e in events if e["event_type"] == "experience.merging"]
@@ -263,7 +236,8 @@ class TestSettleExperienceEvents:
     @pytest.mark.asyncio
     async def test_empty_pending_no_events(self, orch):
         o, bus = orch
-        await o._settle_experiences([], "测试项目", 0.8)
+        with patch.object(o, '_distill_from_feedback', AsyncMock(return_value=[])):
+            await o._settle_experiences("测试项目", 0.8)
         events = bus.get_history("recTEST001")
         assert len(events) == 0
 
@@ -285,13 +259,7 @@ class TestEventOrdering:
 
     @pytest.mark.asyncio
     async def test_event_order(self, orch):
-        from dataclasses import dataclass
-        @dataclass
-        class FakeResult:
-            ok: bool
-            role_id: str
         o, bus = orch
-        o.stage_results = [FakeResult(ok=True, role_id="account_manager")]
         pending = [{
             "role_id": "account_manager",
             "card": {
@@ -300,15 +268,15 @@ class TestEventOrdering:
                 "lesson": "经验教训描述需要足够长度", "category": "电商大促",
                 "applicable_roles": ["account_manager"],
             },
-            "agent": None,
         }]
-        with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
-            with patch("orchestrator.ExperienceManager") as MockEM:
-                em = MockEM.return_value
-                em.check_dedup = AsyncMock(return_value=[])
-                em.save_experience = AsyncMock(return_value="recEXP")
-                em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
-                await o._settle_experiences(pending, "测试项目", 0.8)
+        with patch.object(o, '_distill_from_feedback', AsyncMock(return_value=pending)):
+            with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
+                with patch("orchestrator.ExperienceManager") as MockEM:
+                    em = MockEM.return_value
+                    em.check_dedup = AsyncMock(return_value=[])
+                    em.save_experience = AsyncMock(return_value="recEXP")
+                    em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
+                    await o._settle_experiences("测试项目", 0.8)
 
         events = bus.get_history("recORDER001")
         types = [e["event_type"] for e in events]
@@ -316,16 +284,15 @@ class TestEventOrdering:
         assert "experience.scored" in types
         assert "experience.saved" in types
         assert types[-1] == "experience.settle_completed"
-        # scored 在 saved 之前
         scored_idx = types.index("experience.scored")
         saved_idx = types.index("experience.saved")
         assert scored_idx < saved_idx
 
 
-# ── P11 回归：fan-out 多平台经验不丢失 ──
+# ── role_id 去重逻辑 ──
 
 class TestFanoutExperienceDedup:
-    """验证 _settle_experiences 的 (role_id, platform) 去重逻辑——用 reviewer 角色（在白名单内）。"""
+    """验证 _settle_experiences 的 role_id 去重逻辑（重构后从 (role_id, platform) 改为 role_id）。"""
 
     @pytest.fixture
     def orch(self):
@@ -338,7 +305,6 @@ class TestFanoutExperienceDedup:
         return o, bus
 
     def _make_fanout_pending(self, platform: str) -> dict:
-        # 使用白名单内角色；copywriter 经验不入 L2 经验池
         return {
             "role_id": "reviewer",
             "card": {
@@ -349,69 +315,54 @@ class TestFanoutExperienceDedup:
                 "category": "电商大促",
                 "applicable_roles": ["reviewer", "copywriter"],
             },
-            "agent": None,
-            "task_filter": {"platform": platform},
         }
 
     @pytest.mark.asyncio
-    async def test_fanout_all_platforms_settled(self, orch):
-        """3 个平台的白名单角色经验应各自独立沉淀，不被去重为 1 条。"""
-        from dataclasses import dataclass
-        @dataclass
-        class FakeResult:
-            ok: bool
-            role_id: str
+    async def test_same_role_deduped_to_one(self, orch):
+        """同一 role_id 的多条经验去重为 1 条（保留最后一条）。"""
         o, bus = orch
-        o.stage_results = [FakeResult(ok=True, role_id="reviewer")]
-
         pending = [
             self._make_fanout_pending("小红书"),
             self._make_fanout_pending("抖音"),
             self._make_fanout_pending("公众号"),
         ]
 
-        with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
-            with patch("orchestrator.ExperienceManager") as MockEM:
-                em = MockEM.return_value
-                em.check_dedup = AsyncMock(return_value=[])
-                em.save_experience = AsyncMock(return_value="recEXP")
-                em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
-                await o._settle_experiences(pending, "测试项目", 0.8)
+        with patch.object(o, '_distill_from_feedback', AsyncMock(return_value=pending)):
+            with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
+                with patch("orchestrator.ExperienceManager") as MockEM:
+                    em = MockEM.return_value
+                    em.check_dedup = AsyncMock(return_value=[])
+                    em.save_experience = AsyncMock(return_value="recEXP")
+                    em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
+                    await o._settle_experiences("测试项目", 0.8)
 
         events = bus.get_history("recFANOUT001")
         scored = [e for e in events if e["event_type"] == "experience.scored"]
         saved = [e for e in events if e["event_type"] == "experience.saved"]
         completed = [e for e in events if e["event_type"] == "experience.settle_completed"]
 
-        assert len(scored) == 3, f"应有 3 条 scored 事件，实际 {len(scored)}"
-        assert len(saved) == 3, f"应有 3 条 saved 事件，实际 {len(saved)}"
-        assert completed[0]["payload"]["total_distilled"] == 3
-        assert completed[0]["payload"]["final_settled"] == 3
+        assert len(scored) == 1, f"同 role_id 应去重为 1 条，实际 {len(scored)}"
+        assert len(saved) == 1, f"同 role_id 应去重为 1 条，实际 {len(saved)}"
+        assert completed[0]["payload"]["total_distilled"] == 1
 
     @pytest.mark.asyncio
     async def test_fanout_same_platform_deduped(self, orch):
-        """同一角色同平台重复出现应去重为 1 条。"""
-        from dataclasses import dataclass
-        @dataclass
-        class FakeResult:
-            ok: bool
-            role_id: str
+        """同一角色重复出现应去重为 1 条。"""
         o, bus = orch
-        o.stage_results = [FakeResult(ok=True, role_id="reviewer")]
-
         pending = [
             self._make_fanout_pending("小红书"),
             self._make_fanout_pending("小红书"),  # 重复
         ]
 
-        with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
-            with patch("orchestrator.ExperienceManager") as MockEM:
-                em = MockEM.return_value
-                em.check_dedup = AsyncMock(return_value=[])
-                em.save_experience = AsyncMock(return_value="recEXP")
-                em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
-                await o._settle_experiences(pending, "测试项目", 0.8)
+        with patch.object(o, '_distill_from_feedback', AsyncMock(return_value=pending)):
+            with patch.object(type(o), "_get_project_review_status", new_callable=AsyncMock, return_value="approved"):
+                with patch("orchestrator.ExperienceManager") as MockEM:
+                    em = MockEM.return_value
+                    em.check_dedup = AsyncMock(return_value=[])
+                    em.save_experience = AsyncMock(return_value="recEXP")
+                    em.save_to_wiki = AsyncMock(return_value="wiki/path.md")
+                    await o._settle_experiences("测试项目", 0.8)
 
         events = bus.get_history("recFANOUT001")
         scored = [e for e in events if e["event_type"] == "experience.scored"]
-        assert len(scored) == 1, f"同平台应去重为 1 条，实际 {len(scored)}"
+        assert len(scored) == 1, f"同角色应去重为 1 条，实际 {len(scored)}"

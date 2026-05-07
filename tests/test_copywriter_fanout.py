@@ -87,8 +87,6 @@ class MockAgent:
         self.record_id = record_id
         self._event_bus = event_bus
         self._task_filter = task_filter or {}
-        self._pending_experience = None
-        self._wiki_written = False
         self._messages = []
         self.started_at = 0.0
         self.completed_at = 0.0
@@ -120,14 +118,6 @@ class MockAgent:
             raise raise_always
 
         self.completed_at = time.perf_counter()
-        self._pending_experience = behavior.get("experience") or {
-            "situation": "platform=" + platform,
-            "action": "mock",
-            "outcome": "done",
-            "lesson": "lesson for " + platform,
-            "category": "电商大促",
-            "applicable_roles": ["copywriter"],
-        }
         return "[MockAgent output] platform=" + platform + " completed"
 
 
@@ -184,7 +174,7 @@ async def test_parallel_spawn_3_platforms():
          patch("orchestrator.ProjectMemory", FakeProjectMemory), \
          patch("orchestrator.ContentMemory", FakeContentMemory):
         orch = Orchestrator(record_id="rec_test")
-        result, pending = await orch._run_copywriter_fanout(index=3, total=5)
+        result, _ = await orch._run_copywriter_fanout(index=3, total=5)
 
     if not result.ok:
         fails.append("stage ok should be True, err=" + result.error)
@@ -198,9 +188,6 @@ async def test_parallel_spawn_3_platforms():
         fails.append("spawn not parallel — start span = " + format(span, ".3f") + "s > 0.2s")
     else:
         print("[PASS] test_parallel_spawn_3_platforms (start span = " + format(span, ".4f") + "s)")
-
-    if len(pending) != 3:
-        fails.append("expected 3 pending experiences, got " + str(len(pending)))
 
     return fails
 
@@ -221,7 +208,7 @@ async def test_retry_succeeds_after_first_failure():
          patch("orchestrator.ProjectMemory", FakeProjectMemory), \
          patch("orchestrator.ContentMemory", FakeContentMemory):
         orch = Orchestrator(record_id="rec_test_retry")
-        result, pending = await orch._run_copywriter_fanout(index=3, total=5)
+        result, _ = await orch._run_copywriter_fanout(index=3, total=5)
 
     if not result.ok:
         fails.append("retry should recover, ok=" + str(result.ok) + " err=" + result.error)
@@ -236,9 +223,6 @@ async def test_retry_succeeds_after_first_failure():
 
     if "(retry)" not in result.output:
         fails.append("stage output should mark retry, got: " + result.output[:200])
-
-    if len(pending) != 3:
-        fails.append("expected 3 experiences after retry, got " + str(len(pending)))
 
     if not fails:
         print("[PASS] test_retry_succeeds_after_first_failure")
@@ -260,7 +244,7 @@ async def test_double_failure_isolated():
          patch("orchestrator.ProjectMemory", FakeProjectMemory), \
          patch("orchestrator.ContentMemory", FakeContentMemory):
         orch = Orchestrator(record_id="rec_test_double_fail")
-        result, pending = await orch._run_copywriter_fanout(index=3, total=5)
+        result, _ = await orch._run_copywriter_fanout(index=3, total=5)
 
     if result.ok:
         fails.append("expected stage ok=False, got True (err=" + result.error + ")")
@@ -274,9 +258,6 @@ async def test_double_failure_isolated():
     xhs = [a for a in MockAgentRegistry.instances if (a._task_filter or {}).get("platform") == "小红书"]
     if len(xhs) != 2:
         fails.append("小红书 should spawn 2 agents, got " + str(len(xhs)))
-
-    if len(pending) != 1:
-        fails.append("expected 1 pending exp (抖音 only), got " + str(len(pending)))
 
     if not fails:
         print("[PASS] test_double_failure_isolated")
@@ -339,41 +320,6 @@ async def test_empty_rows_no_agents_spawned():
 
     if not fails:
         print("[PASS] test_empty_rows_no_agents_spawned")
-    return fails
-
-
-async def test_all_pending_experiences_collected():
-    fails = []
-    from orchestrator import Orchestrator
-
-    MockAgentRegistry.reset()
-    MockAgentRegistry.behaviors = {
-        "小红书": {"delay": 0.02, "experience": {"lesson": "xhs lesson", "category": "电商大促"}},
-        "抖音":   {"delay": 0.02, "experience": {"lesson": "dy lesson", "category": "电商大促"}},
-        "公众号": {"delay": 0.02, "experience": {"lesson": "gzh lesson", "category": "电商大促"}},
-        "通用":   {"delay": 0.02, "experience": {"lesson": "default lesson", "category": "电商大促"}},
-    }
-    FakeContentMemory.rows = _build_fake_rows({"小红书": 1, "抖音": 1, "公众号": 1, "": 1})
-
-    with patch("orchestrator.BaseAgent", MockAgent), \
-         patch("orchestrator.ProjectMemory", FakeProjectMemory), \
-         patch("orchestrator.ContentMemory", FakeContentMemory):
-        orch = Orchestrator(record_id="rec_exp")
-        result, pending = await orch._run_copywriter_fanout(index=3, total=5)
-
-    if len(pending) != 4:
-        fails.append("expected 4 experiences (3 platforms + 通用), got " + str(len(pending)))
-
-    lessons = sorted(p["card"]["lesson"] for p in pending)
-    expected = sorted(["xhs lesson", "dy lesson", "gzh lesson", "default lesson"])
-    if lessons != expected:
-        fails.append("lessons mismatch: " + str(lessons) + " != " + str(expected))
-
-    if not all("task_filter" in p and "platform" in p["task_filter"] for p in pending):
-        fails.append("pending entries missing task_filter.platform")
-
-    if not fails:
-        print("[PASS] test_all_pending_experiences_collected")
     return fails
 
 
@@ -440,7 +386,6 @@ async def main():
         test_retry_succeeds_after_first_failure(),
         test_double_failure_isolated(),
         test_empty_rows_no_agents_spawned(),
-        test_all_pending_experiences_collected(),
     ]
     for coro in coros:
         try:

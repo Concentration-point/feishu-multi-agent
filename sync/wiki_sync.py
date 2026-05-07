@@ -19,30 +19,32 @@ from tools.write_wiki import prepare_docx_markdown, prepare_docx_plaintext
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────
-# 同步方向的顶层设计
+# 同步方向的顶层设计（6 层目录结构）
 #
-# 01-06：人类维护的知识库（企业底座 / 方法论 / 行业 / 平台 / 模板 / 客户档案）
-#   → source of truth 在飞书，只允许 飞书 → 本地 下行，**禁止本地覆盖飞书**
+# 01_审核库 / 02_客户档案 / 04_服务方法论 / 05_平台打法：
+#   人工维护层，source of truth 在飞书，只允许 飞书 → 本地 下行
+#   **禁止本地覆盖飞书**
 #
-# 07-10：Agent / 系统产出的项目档案、执行记录、复盘、经验
-#   → source of truth 在本地，允许 本地 → 飞书 上行
+# 03_经验沉淀：Agent 产出的正式经验区
+#   source of truth 在本地，允许 本地 → 飞书 上行
+#   必须通过升格审批（06→03）才能写入
 #
-# 11_待整理收件箱：Agent 自动蒸馏缓冲区，脏数据不外推
+# 06_待整理收件箱：Agent 自动蒸馏缓冲区，脏数据不外推
 # references/：本地对标素材，search_reference 专用，不外推
 # ─────────────────────────────────────────────────────────────────────
 
 # 允许上行（本地 → 飞书）的顶层目录白名单
-# 知识库重构后 07/08/09 已移除，上行目标仅剩 10_经验沉淀
+# 只有经升格审批的正式经验区允许推送
 _DEFAULT_UPLOAD_INCLUDE_DIRS: tuple[str, ...] = (
-    "10_经验沉淀",
+    "03_经验沉淀",
 )
 
 
 def _load_upload_include_dirs() -> tuple[str, ...]:
     """允许上行同步的顶层目录白名单。
 
-    默认只同步 Agent / 系统产出（10_经验沉淀）。可通过 WIKI_SYNC_UPLOAD_DIRS
-    环境变量覆盖（逗号分隔）。07/08/09 已于知识库重构中移除。
+    默认只同步正式经验区（03_经验沉淀）。可通过 WIKI_SYNC_UPLOAD_DIRS
+    环境变量覆盖（逗号分隔）。
 
     历史变量 WIKI_SYNC_EXCLUDE_DIRS 仍读，用于追加排除（和白名单取交差）。
     """
@@ -76,7 +78,7 @@ class WikiSyncService:
         self._state_file = self._base_path / ".sync_state.json"
         # 缓存: 飞书节点 title → node info
         self._parent_cache: dict[str, dict] = {}
-        # 上行白名单：只有 07-10 项目档案 / 执行记录 / 复盘 / 经验沉淀 允许推到飞书
+        # 上行白名单：只有 03_经验沉淀（升格审批后）允许推到飞书
         self._upload_include_dirs: tuple[str, ...] = _load_upload_include_dirs()
         self._extra_excludes: tuple[str, ...] = _load_extra_excludes()
 
@@ -94,11 +96,11 @@ class WikiSyncService:
         """启动无限循环的后台同步任务。"""
         logger.info("[WikiSync] 后台同步已启动，间隔 %ds", self.sync_interval)
         while True:
+            await asyncio.sleep(self.sync_interval)
             try:
                 await self.sync_once()
             except Exception as e:
                 logger.error("[WikiSync] 同步异常: %s", e)
-            await asyncio.sleep(self.sync_interval)
 
     async def trigger(self) -> None:
         """手动触发一次同步。"""
@@ -209,12 +211,9 @@ class WikiSyncService:
     async def _sync_file(self, rel_path: str, full_path: Path) -> str:
         """将单个文件同步到飞书知识空间。返回实际使用的同步模式。"""
         raw_content = full_path.read_text(encoding="utf-8")
+        # 03_经验沉淀 走结构化 block 转换，保留标题 / 列表 / 代码块格式
+        content = prepare_docx_markdown(raw_content)
         sync_mode = "markdown"
-        if rel_path.startswith("10_经验沉淀/"):
-            content = prepare_docx_plaintext(raw_content)
-            sync_mode = "plain_safe"
-        else:
-            content = prepare_docx_markdown(raw_content)
 
         # 映射飞书节点路径
         parent_title, doc_title = self._map_node_path(rel_path)
@@ -239,6 +238,7 @@ class WikiSyncService:
             )
             obj_token = node.get("obj_token", "")
             if obj_token:
+                await self._wiki.wait_for_new_doc_ready(obj_token)
                 await self._write_content(obj_token, content, sync_mode)
             logger.info("[WikiSync] 创建文档: %s → %s (%s)", rel_path, doc_title, sync_mode)
         return sync_mode
@@ -253,18 +253,16 @@ class WikiSyncService:
 
     # ── 飞书父节点中文名映射 ──
     #
-    # 上行（本地 → 飞书）：只有白名单 _DEFAULT_UPLOAD_INCLUDE_DIRS 里的会真被推送
-    # 下行（飞书 → 本地）：01-06 的映射给未来 WikiDownloadService 用，保留完整结构
+    # 上行（本地 → 飞书）：只有 03_经验沉淀 会真被推送
+    # 下行（飞书 → 本地）：01/02/04/05 的映射供 WikiDownloadService 使用
     _LAYER_LABELS: dict[str, str] = {
-        # 02-04, 06 · 人类维护，source of truth 在飞书（仅用于下行映射）
-        # 01/05 已于知识库重构中移除
-        "02_服务方法论": "服务方法论",
-        "03_行业知识": "行业知识",
-        "04_平台打法": "平台打法",
-        "06_客户档案": "客户档案",
-        # 10 · Agent/系统产出，source of truth 在本地（真正上行目标）
-        # 07/08/09 已于知识库重构中移除
-        "10_经验沉淀": "经验沉淀",
+        # 人工维护层，source of truth 在飞书（仅用于下行映射参考）
+        "01_审核库": "审核库",
+        "02_客户档案": "客户档案",
+        "04_服务方法论": "服务方法论",
+        "05_平台打法": "平台打法",
+        # Agent 产出层，source of truth 在本地（真正上行目标）
+        "03_经验沉淀": "经验沉淀",
     }
 
     def _map_node_path(self, rel_path: str) -> tuple[str, str]:
@@ -276,8 +274,8 @@ class WikiSyncService:
         parts = rel_path.split("/")
 
         if parts[0] in self._LAYER_LABELS:
-            # 新分层：01_企业底座/xxx.md → 「企业底座」节点下「xxx」
-            # 01_企业底座/子分类/xxx.md → 「企业底座-子分类」节点下「xxx」
+            # 03_经验沉淀/电商大促/xxx.md → 「经验沉淀-电商大促」节点下「xxx」
+            # 03_经验沉淀/xxx.md → 「经验沉淀」节点下「xxx」
             label = self._LAYER_LABELS[parts[0]]
             if len(parts) >= 3:
                 parent_title = f"{label}-{parts[1]}"

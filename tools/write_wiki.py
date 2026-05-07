@@ -1,8 +1,7 @@
 """工具: 写入知识收件箱（本地 + 标记同步）
 
-新分层后所有自动产出的经验写入 knowledge/11_待整理收件箱/，等升格机制
-通过后才迁入 knowledge/10_经验沉淀/。旧 knowledge/wiki/ 目录作为历史
-数据保留但不再新写。
+所有 Agent 自动产出的经验写入 knowledge/06_待整理收件箱/，等升格审批
+通过后才迁入 knowledge/03_经验沉淀/（正式经验区，会上行推送飞书）。
 
 同时导出共享函数供 memory/experience.py 和 sync/wiki_sync.py 复用：
   - sanitize_name: 文件名清洗（覆盖 Windows 非法字符）
@@ -13,10 +12,8 @@
   - strip_frontmatter / prepare_docx_markdown: 同步到飞书前的 Markdown 清洗
 """
 
-# 新分层：自动产出默认落点
-WIKI_WRITE_SUBDIR = "11_待整理收件箱"
-# 旧分层：历史数据留存，不再新写
-LEGACY_WIKI_SUBDIR = "wiki"
+# Agent 自动产出落点（脏缓冲区，不出站）
+WIKI_WRITE_SUBDIR = "06_待整理收件箱"
 
 import asyncio
 import json
@@ -32,9 +29,9 @@ SCHEMA = {
     "function": {
         "name": "write_wiki",
         "description": (
-            "将经验或知识沉淀写入本地 11_待整理收件箱/（新分层缓冲区）。"
-            "后台同步线程会把收件箱以外的正式知识推到飞书知识空间；"
-            "收件箱数据不外推，等升格后才进入 10_经验沉淀/。"
+            "将经验或知识沉淀写入本地 06_待整理收件箱/（脏缓冲区）。"
+            "后台同步线程只推送正式经验区（03_经验沉淀/）到飞书知识空间；"
+            "收件箱数据不外推，等升格审批通过后才迁入 03_经验沉淀/。"
         ),
         "parameters": {
             "type": "object",
@@ -108,7 +105,7 @@ def mark_dirty(base_path: Path, rel_path: str) -> None:
 def update_wiki_index(wiki_dir: Path, *, url_prefix: str | None = None) -> None:
     """扫描 wiki_dir 下所有文件，重新生成 _index.md。
 
-    url_prefix：索引条目前缀（如 'wiki' 或 '11_待整理收件箱'）。
+    url_prefix：索引条目前缀（如 'wiki' 或 '06_待整理收件箱'）。
     默认使用 wiki_dir 的目录名，保持可读性。
     """
     entries: list[str] = []
@@ -234,7 +231,7 @@ async def execute(params: dict, context: AgentContext) -> str:
     safe_title = sanitize_name(title)
 
     base_path = Path(KNOWLEDGE_BASE_PATH)
-    # 写入新分层「11_待整理收件箱」
+    # 写入缓冲区「06_待整理收件箱」
     inbox_dir = (base_path / WIKI_WRITE_SUBDIR).resolve()
     cat_dir = (inbox_dir / safe_category).resolve()
     target_file = (cat_dir / f"{safe_title}.md").resolve()
@@ -258,12 +255,12 @@ async def execute(params: dict, context: AgentContext) -> str:
     # 更新索引（指向新分层）
     await asyncio.to_thread(update_wiki_index, inbox_dir, url_prefix=WIKI_WRITE_SUBDIR)
 
-    # 标记 dirty（使用新分层路径；sync 会根据黑名单决定是否实际推送）
+    # 标记 dirty（sync 会根据上行白名单过滤，06_待整理收件箱 不会被推送）
     rel_path = f"{WIKI_WRITE_SUBDIR}/{safe_category}/{safe_title}.md"
     await asyncio.to_thread(mark_dirty, base_path, rel_path)
     await asyncio.to_thread(mark_dirty, base_path, f"{WIKI_WRITE_SUBDIR}/_index.md")
 
     return (
         f"已写入 {WIKI_WRITE_SUBDIR}/{safe_category}/{safe_title}.md"
-        "（收件箱缓冲区，等待升格到 10_经验沉淀/ 后才对外同步）"
+        "（收件箱缓冲区，等待升格审批通过后迁入 03_经验沉淀/ 再对外同步）"
     )

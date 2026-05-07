@@ -42,6 +42,53 @@ from memory.project import BriefProject, ContentMemory, ProjectMemory
 
 logger = logging.getLogger(__name__)
 
+# ── 经验蒸馏 prompt（链路A：审核驳回反馈 → 文案/审核经验）──
+_DISTILL_PROMPT_CHAIN_A = (
+    "你是一名飞书多 Agent 系统的经验蒸馏员。\n\n"
+    "以下是一个内容营销项目的审核驳回记录：\n"
+    "任务摘要：{task_summary}\n\n"
+    "审核驳回意见：\n{feedback_text}\n\n"
+    "请基于以上审核反馈（不要推测其他信息），输出一条供文案和审核角色复用的经验卡片 JSON：\n"
+    "{\n"
+    '  "situation": "某平台某品类内容在撰写/审核时遇到的具体场景",\n'
+    '  "violations_found": ["从驳回意见提炼出的违规类型1", "违规类型2"],\n'
+    '  "action": "文案应该怎么写才能提前规避这类问题",\n'
+    '  "outcome": "该类问题被驳回的后果",\n'
+    '  "lesson": "下次撰写此类内容时必须预先检查的具体事项（可操作）",\n'
+    '  "category": "电商大促|新品发布|品牌传播|日常运营",\n'
+    '  "applicable_roles": ["reviewer", "copywriter"]\n'
+    "}\n\n"
+    "要求：\n"
+    "- lesson 必须具体到可执行的检查项，不要空泛\n"
+    "- violations_found 落到具体违规类型，不要写「表达问题」这种\n"
+    '- applicable_roles 固定为 ["reviewer", "copywriter"]，不允许修改\n'
+    "- 只输出 JSON，不要任何其他文字"
+)
+
+# ── 经验蒸馏 prompt（链路B：人类修改意见 → 客户经理经验）──
+_DISTILL_PROMPT_CHAIN_B = (
+    "你是一名飞书多 Agent 系统的经验蒸馏员。\n\n"
+    "以下是一个内容营销项目的人类审核修改记录：\n"
+    "任务摘要：{task_summary}\n\n"
+    "人类审核意见：\n{feedback_text}\n\n"
+    "请基于以上人类修改意见（不要推测其他信息），输出一条供客户经理角色复用的 Brief 解读经验卡片 JSON：\n"
+    "{\n"
+    '  "situation": "某类客户或某类项目的 Brief 解读场景",\n'
+    '  "human_correction": "人类指出的关键修正点（具体记录，若无修改写「无修改」）",\n'
+    '  "reasoning": "人类修正背后的思维方式或业务逻辑",\n'
+    '  "action": "正确的 Brief 解读策略",\n'
+    '  "outcome": "采纳修正后的结果",\n'
+    '  "lesson": "当客户说[X]时，通常意思是[Y]，下次需要关注[Z]（具体可操作）",\n'
+    '  "category": "电商大促|新品发布|品牌传播|日常运营",\n'
+    '  "applicable_roles": ["account_manager"]\n'
+    "}\n\n"
+    "要求：\n"
+    "- human_correction 必须具体记录人类的修改点\n"
+    "- lesson 必须是具体可复用的解读模式，不是「注意沟通」这种废话\n"
+    '- applicable_roles 固定为 ["account_manager"]，不允许修改\n'
+    "- 只输出 JSON，不要任何其他文字"
+)
+
 
 def _clear_stage_checkpoint(record_id: str, role_id: str) -> None:
     """清除指定角色的所有 checkpoint 文件（含 fan-out 平台后缀变体）。
@@ -159,7 +206,6 @@ class Orchestrator:
 
     async def run(self) -> list[StageResult]:
         self._start_time = time.perf_counter()
-        pending_experiences: list[dict] = []
         self._review_threshold = await self._get_review_threshold()
 
         try:
@@ -287,12 +333,11 @@ class Orchestrator:
 
             # ── 执行阶段（保留 copywriter fan-out 特殊路径）──
             if role_id == "copywriter":
-                result, fanout_experiences = await self._run_copywriter_fanout(
+                result, _ = await self._run_copywriter_fanout(
                     index=step,
                     total=len(self.pipeline),
                 )
                 self.stage_results.append(result)
-                pending_experiences.extend(fanout_experiences)
             else:
                 result, agent = await self._run_stage_with_agent(
                     role_id,
@@ -300,15 +345,6 @@ class Orchestrator:
                     total=len(self.pipeline),
                 )
                 self.stage_results.append(result)
-
-                if agent and agent._pending_experience:
-                    pending_experiences.append(
-                        {
-                            "role_id": role_id,
-                            "card": agent._pending_experience,
-                            "agent": agent,
-                        }
-                    )
 
             # ── 广播阶段结果 ──
             if result.ok:
@@ -510,18 +546,27 @@ class Orchestrator:
             "review_threshold": self._review_threshold,
         })
 
-        # ── 生成飞书交付云文档 ──
-        if DELIVERY_DOC_ENABLED and WIKI_SPACE_ID and current_status in (STATUS_DONE, None):
-            try:
-                doc_url = await self._generate_delivery_document(project_name)
-                if doc_url:
-                    self._publish("delivery_doc.created", {"url": doc_url, "project_name": project_name})
-            except Exception as exc:
-                logger.warning("交付文档生成失败（不影响主流程）: %s", exc)
-                print(f"[Orchestrator] 警告: 交付文档生成失败: {type(exc).__name__}: {exc}")
+        # ── 生成飞书交付云文档（后台任务，不阻塞流水线）──
+        # 只在 5 判据全过（is_truly_completed）时才生成，避免未完成/中止状态误触发
+        if DELIVERY_DOC_ENABLED and WIKI_SPACE_ID and is_truly_completed:
+            async def _bg_delivery_doc():
+                try:
+                    # 加 90s 总超时：防止 wiki/docx API 在 Windows 下无限卡死
+                    doc_url = await asyncio.wait_for(
+                        self._generate_delivery_document(project_name),
+                        timeout=90.0,
+                    )
+                    if doc_url:
+                        self._publish("delivery_doc.created", {"url": doc_url, "project_name": project_name})
+                except asyncio.TimeoutError:
+                    logger.warning("[交付文档] 生成超时（90s），已跳过本次交付文档")
+                except Exception as exc:
+                    logger.warning("交付文档后台生成失败: %s", exc)
+            asyncio.create_task(_bg_delivery_doc())
+            logger.info("[Orchestrator] 交付文档后台任务已启动，流水线继续")
 
-        await self._settle_experiences(pending_experiences, project_name, pass_rate)
-        await self._append_evolution_log(project_name, project_type, pass_rate, pending_experiences)
+        await self._settle_experiences(project_name, pass_rate)
+        await self._append_evolution_log(project_name, project_type, pass_rate)
         return self.stage_results
 
     async def _run_stage_with_agent(
@@ -594,14 +639,7 @@ class Orchestrator:
             result, agent = await self._run_stage_with_agent(
                 "copywriter", index=index, total=total,
             )
-            pending = []
-            if agent and agent._pending_experience:
-                pending.append({
-                    "role_id": "copywriter",
-                    "card": agent._pending_experience,
-                    "agent": agent,
-                })
-            return result, pending
+            return result, []
 
         groups: dict[str, list] = {}
         for row in rows:
@@ -718,19 +756,7 @@ class Orchestrator:
                     "retried": False,
                 }
 
-        # ── 5. 收集 pending experiences ──
-        pending_experiences: list[dict] = []
-        for platform in group_names:
-            ag = final_status[platform].get("agent")
-            if ag and ag._pending_experience:
-                pending_experiences.append({
-                    "role_id": "copywriter",
-                    "card": ag._pending_experience,
-                    "agent": ag,
-                    "task_filter": {"platform": platform},
-                })
-
-        # ── 6. 完成度检查：重新读取全部内容行，逐条检查 draft ──
+        # ── 5. 完成度检查：重新读取全部内容行，逐条检查 draft ──
         retry_filled = 0
         try:
             check_rows = await ContentMemory().list_by_project(proj.client_name)
@@ -793,14 +819,6 @@ class Orchestrator:
                         )
                     except Exception:
                         pass
-                    # 收集重试 agent 的经验
-                    if retry_agent._pending_experience:
-                        pending_experiences.append({
-                            "role_id": "copywriter",
-                            "card": retry_agent._pending_experience,
-                            "agent": retry_agent,
-                            "task_filter": {"platform": retry_platform, "is_retry": True},
-                        })
                 except Exception as retry_exc:
                     logger.warning(
                         "fan-out 定向重试失败 platform=%s: %s",
@@ -892,7 +910,7 @@ class Orchestrator:
         )
         print(
             f"[Orchestrator] fan-out {completion_label}: {ok_cnt}/{len(group_names)} 平台成功, "
-            f"收集 {len(pending_experiences)} 条经验, 总耗时 {duration:.2f}s, "
+            f"总耗时 {duration:.2f}s, "
             f"成稿 {len([r for r in (check_rows or []) if (r.draft or '').strip()])}/{len(check_rows or [])}"
         )
 
@@ -902,7 +920,7 @@ class Orchestrator:
             duration_sec=duration,
             output=stage_output,
             error=stage_error,
-        ), pending_experiences
+        ), []
 
     async def _handle_reviewer_retries(self) -> None:
         """审核后评估：检查通过率和红线，不达标则回退状态为"撰写中"让主循环路由接管。
@@ -1555,6 +1573,11 @@ class Orchestrator:
             logger.warning("交付文档：无法获取 document_id")
             return None
 
+        # 飞书 wiki 新建节点后，底层 docx 文档需要约 1-2s 才能通过 docx API 访问，
+        # 立即请求会导致 httpx 60s 超时 × 3次重试（~4分钟挂起）。
+        await wiki.wait_for_new_doc_ready(obj_token)
+        logger.info("[交付文档] 开始写入文档内容，obj_token=%s", obj_token)
+
         # 构建文档结构化块（面向客户）
         blocks: list[dict] = []
 
@@ -1638,19 +1661,34 @@ class Orchestrator:
             blocks.append({"type": "table", "rows": pt_rows})
 
             # 图表（matplotlib，失败不影响主流程）
+            # 用 run_in_executor 防止同步 matplotlib 代码阻塞 asyncio 事件循环
+            # Windows 首次初始化 MKL/字体缓存时可能长时间卡住，加 15s timeout 兜底
             try:
                 from feishu.delivery_charts import generate_platform_bar_chart, generate_status_pie_chart
+                import functools
+                _loop = asyncio.get_event_loop()
 
-                bar_png = generate_platform_bar_chart(stats["platform_counts"])
+                bar_png = await asyncio.wait_for(
+                    _loop.run_in_executor(None, generate_platform_bar_chart, stats["platform_counts"]),
+                    timeout=15.0,
+                )
                 if bar_png:
                     blocks.append({"type": "image", "data": bar_png, "name": "platform_bar.png"})
 
                 if stats["total"] > 0:
-                    pie_png = generate_status_pie_chart(stats["scheduled"], stats["pending"])
+                    pie_png = await asyncio.wait_for(
+                        _loop.run_in_executor(
+                            None,
+                            functools.partial(generate_status_pie_chart, stats["scheduled"], stats["pending"]),
+                        ),
+                        timeout=15.0,
+                    )
                     if pie_png:
                         blocks.append({"type": "image", "data": pie_png, "name": "status_pie.png"})
             except ImportError:
                 logger.info("matplotlib 未安装，跳过图表生成")
+            except asyncio.TimeoutError:
+                logger.warning("图表生成超时（15s），跳过图表嵌入")
             except Exception as chart_exc:
                 logger.warning("图表生成失败（不影响文档）: %s", chart_exc)
 
@@ -1691,7 +1729,6 @@ class Orchestrator:
         project_name: str,
         project_type: str,
         pass_rate: float | None,
-        pending_experiences: list[dict] | None = None,
     ) -> None:
         """将本次运行关键指标追加写入 evolution_log.json。写入失败只打日志不阻塞。"""
         import json as _json
@@ -1700,12 +1737,8 @@ class Orchestrator:
 
         log_path = Path("evolution_log.json")
 
-        # 从所有 Agent 实例汇总本次注入的经验条数
-        experiences_injected = sum(
-            getattr(item.get("agent"), "_injected_experience_count", 0)
-            for item in (pending_experiences or [])
-            if item.get("agent") is not None
-        )
+        # 经验注入条数由 BaseAgent 内部统计，蒸馏重构后不再从 pending 汇总
+        experiences_injected = 0
 
         # 统计内容行数
         content_count = 0
@@ -1741,14 +1774,116 @@ class Orchestrator:
         except Exception as exc:
             logger.warning("evolution_log.json 写入失败（不阻塞主流程）: %s", exc)
 
+    async def _distill_experience(
+        self,
+        task_summary: str,
+        feedback_text: str,
+        applicable_roles: list[str],
+    ) -> dict | None:
+        """新开干净 LLM 调用从外部反馈中蒸馏经验，不复用 ReAct 历史。
+
+        根据 applicable_roles 选择链路A（含 reviewer）或链路B（account_manager）prompt。
+        """
+        if "reviewer" in applicable_roles:
+            prompt_tpl = _DISTILL_PROMPT_CHAIN_A
+        else:
+            prompt_tpl = _DISTILL_PROMPT_CHAIN_B
+
+        prompt = prompt_tpl.format(
+            task_summary=task_summary,
+            feedback_text=feedback_text,
+        )
+
+        try:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(
+                base_url=LLM_BASE_URL,
+                api_key=LLM_API_KEY,
+                timeout=LLM_TIMEOUT_SECONDS,
+            )
+            resp = await client.chat.completions.create(
+                model=LLM_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1]
+            if raw.endswith("```"):
+                raw = raw.rsplit("```", 1)[0]
+            raw = raw.strip()
+
+            card = json.loads(raw)
+
+            _VALID_CATEGORIES = {"电商大促", "新品发布", "品牌传播", "日常运营"}
+            card.setdefault("situation", "")
+            card.setdefault("action", "")
+            card.setdefault("outcome", "")
+            card.setdefault("lesson", "")
+            if card.get("category") not in _VALID_CATEGORIES:
+                card["category"] = "未分类"
+            # 强制覆盖 applicable_roles，不允许 LLM 自行修改
+            card["applicable_roles"] = applicable_roles
+
+            return card
+        except Exception as exc:
+            logger.warning("[经验蒸馏] _distill_experience 失败: %s", exc)
+            return None
+
+    async def _distill_from_feedback(self, project_name: str) -> list[dict]:
+        """检查外部反馈信号，按需蒸馏经验，返回 experience card list。
+
+        链路A：内容排期表中有审核驳回行 → 蒸馏文案/审核经验
+        链路B：项目主表有人类修改意见 → 蒸馏客户经理经验
+        两条链路独立执行，各自异常不影响另一条，无反馈时返回空列表。
+        """
+        results: list[dict] = []
+
+        # ── 链路A：审核驳回反馈 → reviewer / copywriter 经验 ──
+        try:
+            rows = await ContentMemory().list_by_project(project_name)
+            rejected_rows = [
+                r for r in rows
+                if r.review_status in ("需修改", "驳回") and (r.review_feedback or "").strip()
+            ]
+            if rejected_rows:
+                feedback_text = "\n\n".join(r.review_feedback.strip() for r in rejected_rows)
+                task_summary = (
+                    f"项目「{project_name}」内容审核，{len(rejected_rows)} 条被驳回"
+                )
+                card = await self._distill_experience(
+                    task_summary, feedback_text, ["reviewer", "copywriter"]
+                )
+                if card:
+                    results.append({"role_id": "reviewer", "card": card})
+                    logger.info("[经验蒸馏] 链路A完成: %s", card.get("lesson", "")[:60])
+        except Exception as exc:
+            logger.warning("[经验蒸馏] 链路A失败，跳过: %s", exc)
+
+        # ── 链路B：人类修改意见 → account_manager 经验 ──
+        try:
+            proj = await self._pm.load()
+            human_feedback = (proj.human_feedback or "").strip()
+            if human_feedback:
+                task_summary = f"项目「{project_name}」Brief 解读，人类审核给出修改意见"
+                card = await self._distill_experience(
+                    task_summary, human_feedback, ["account_manager"]
+                )
+                if card:
+                    results.append({"role_id": "account_manager", "card": card})
+                    logger.info("[经验蒸馏] 链路B完成: %s", card.get("lesson", "")[:60])
+        except Exception as exc:
+            logger.warning("[经验蒸馏] 链路B失败，跳过: %s", exc)
+
+        return results
+
     async def _settle_experiences(
         self,
-        pending: list[dict],
         project_name: str,
         pass_rate: float | None,
     ) -> None:
+        pending = await self._distill_from_feedback(project_name)
         if not pending:
-            print("[Orchestrator] 无经验卡片需要沉淀")
+            print("[Orchestrator] 无外部反馈信号，跳过经验蒸馏")
             return
 
         self._publish("experience.settle_started", {
@@ -1756,10 +1891,9 @@ class Orchestrator:
             "project_name": project_name,
         })
 
-        deduped: dict[tuple[str, str], dict] = {}
+        deduped: dict[str, dict] = {}
         for item in pending:
-            platform = (item.get("task_filter") or {}).get("platform", "")
-            deduped[(item["role_id"], platform)] = item
+            deduped[item["role_id"]] = item
         unique_pending = list(deduped.values())
 
         em = ExperienceManager()
@@ -1771,10 +1905,8 @@ class Orchestrator:
         for item in unique_pending:
             role_id = item["role_id"]
             card = item["card"]
-            agent_ref: BaseAgent | None = item.get("agent")
 
             # 角色白名单过滤：只有外部验证来源的角色经验才进入 L2 经验池。
-            # copywriter 自评无外部验证；project_manager 为 LLM 通识；均只留 wiki 本地记录。
             if role_id not in EXPERIENCE_POOL_ROLE_ALLOWLIST:
                 logger.info(
                     "[经验沉淀] 跳过 %s，该角色不在 L2 经验池白名单 %s",
@@ -1782,31 +1914,8 @@ class Orchestrator:
                 )
                 continue
 
-            stage_ok = any(result.ok and result.role_id == role_id for result in self.stage_results)
-
-            knowledge_cited = False
-            if agent_ref and hasattr(agent_ref, "_messages"):
-                for message in agent_ref._messages:
-                    if not isinstance(message, dict) or message.get("role") != "assistant":
-                        continue
-                    for tool_call in message.get("tool_calls") or []:
-                        if not isinstance(tool_call, dict):
-                            continue
-                        fn_name = tool_call.get("function", {}).get("name", "")
-                        if fn_name in {"search_knowledge", "get_experience"}:
-                            knowledge_cited = True
-                            break
-                    if knowledge_cited:
-                        break
-
-            no_rework = True  # 白名单内角色均不存在返工惩罚场景
-
-            confidence = self._calc_confidence(
-                pass_rate=pass_rate,
-                task_completed=stage_ok,
-                no_rework=no_rework,
-                knowledge_cited=knowledge_cited,
-            )
+            # 外部反馈驱动的蒸馏已经过验证，固定置信度 0.85
+            confidence = 0.85
 
             self._publish("experience.scored", {
                 "role_id": role_id,
@@ -1814,10 +1923,7 @@ class Orchestrator:
                 "threshold": EXPERIENCE_CONFIDENCE_THRESHOLD,
                 "passed": confidence >= EXPERIENCE_CONFIDENCE_THRESHOLD,
                 "factors": {
-                    "pass_rate": pass_rate,
-                    "task_completed": stage_ok,
-                    "no_rework": no_rework,
-                    "knowledge_cited": knowledge_cited,
+                    "external_feedback": True,
                 },
                 "lesson": str(card.get("lesson", "") or "")[:80],
                 "category": card.get("category", "未分类"),
@@ -1842,10 +1948,7 @@ class Orchestrator:
                 card["source_stage"] = role_id
                 card["review_status"] = await self._get_project_review_status()
                 saved = await em.save_experience(card, confidence, project_name)
-                # Agent 未自主写入 wiki 时，Orchestrator 兜底写入
-                wiki_saved = None
-                if not getattr(agent_ref, "_wiki_written", False):
-                    wiki_saved = await em.save_to_wiki(card, confidence)
+                wiki_saved = await em.save_to_wiki(card, confidence)
                 if saved or wiki_saved:
                     settled += 1
                     self._publish("experience.saved", {
@@ -1900,7 +2003,7 @@ class Orchestrator:
         print("\n" + "-" * 60)
         print("  经验进化统计（自进化闭环）")
         print("-" * 60)
-        print(f"  Hook 蒸馏产出:   {total} 条")
+        print(f"  外部反馈蒸馏产出: {total} 条")
         print(f"  置信度阈值:     ≥ {EXPERIENCE_CONFIDENCE_THRESHOLD:.2f}")
         print(f"  打分通过:       {passed} 条")
         print(f"  去重合并:       {merged_count} 组")
