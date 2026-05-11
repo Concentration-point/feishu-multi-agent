@@ -40,6 +40,11 @@ _TRANSITIONS = {
 
 async def execute(params: dict, context: AgentContext) -> str:
     target = params.get("status", "")
+    if context.role_id == "copywriter":
+        return (
+            "unauthorized: copywriter cannot update global project status; "
+            "Orchestrator owns status transitions."
+        )
     if target not in VALID_STATUSES:
         return f"错误: 无效状态 '{target}'。合法状态: {VALID_STATUSES}"
 

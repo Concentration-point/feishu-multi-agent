@@ -94,6 +94,15 @@ class AgentResult:
     missing_required_tools: list[str]
     meta: dict[str, Any]
 
+    def __str__(self) -> str:
+        return self.output or ""
+
+    def __contains__(self, item: str) -> bool:
+        return item in (self.output or "")
+
+    def lower(self) -> str:
+        return (self.output or "").lower()
+
 
 def parse_soul(text: str) -> SoulConfig:
     """解析 soul.md：--- YAML frontmatter --- + Markdown body。
@@ -1164,8 +1173,8 @@ class BaseAgent:
         if missing:
             logger.warning("[%s] post-validation 后仍缺少必调工具: %s", self.soul.name, missing)
             failure_output = (
-                f"{final_output}\n\n"
-                f"[REQUIRED_TOOL_MISSING] 必调工具缺失: {missing}"
+                "[FAILED:required_tool_missing] "
+                f"Plan-Verify/required tool failed; missing: {missing}"
             ).strip()
             self._messages = messages
             self._publish("agent.failed", {

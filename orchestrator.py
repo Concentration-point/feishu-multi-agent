@@ -86,6 +86,26 @@ def _detect_required_tool_failure(output, agent) -> tuple[bool, str, str]:
 
     return False, "", raw_output
 
+
+def _detect_tool_error(agent) -> tuple[bool, str]:
+    """识别被自然语言吞掉的工具错误。"""
+    messages = getattr(agent, "_messages", None) or []
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "tool":
+            continue
+        content = str(msg.get("content") or "")
+        lowered = content.lower()
+        if (
+            "feishuapierror" in lowered
+            or "tool error" in lowered
+            or "工具执行错误" in content
+            or "宸ュ叿鎵ц閿欒" in content
+            or content.startswith("错误:")
+            or content.startswith("閿欒:")
+        ):
+            return True, content[:300]
+    return False, ""
+
 # ── 经验蒸馏 prompt（链路A：审核驳回反馈 → 文案/审核经验）──
 _DISTILL_PROMPT_CHAIN_A = (
     "你是一名飞书多 Agent 系统的经验蒸馏员。\n\n"
@@ -639,6 +659,16 @@ class Orchestrator:
                     error=error,
                     used_ask_human=getattr(agent, '_used_ask_human', False),
                 ), agent
+            tool_failed, tool_error = _detect_tool_error(agent)
+            if tool_failed:
+                error = f"tool error detected: {tool_error}"
+                logger.error("阶段 %s 工具错误: %s", role_id, tool_error)
+                return StageResult(
+                    role_id=role_id, ok=False, duration_sec=duration,
+                    output=output_text,
+                    error=error,
+                    used_ask_human=getattr(agent, '_used_ask_human', False),
+                ), agent
             print(f"[Orchestrator] 阶段 {role_id} 完成，耗时 {duration:.2f} 秒")
             return StageResult(
                 role_id=role_id, ok=True, duration_sec=duration,
@@ -1168,7 +1198,7 @@ class Orchestrator:
         except Exception as exc:
             logger.exception("门禁加载项目失败")
             print(f"[Orchestrator] 警告: 门禁加载项目失败: {exc}")
-            return "approved"
+            return "error"
 
         brief_analysis = (proj.brief_analysis or "").strip()
         if not brief_analysis:
@@ -1205,7 +1235,7 @@ class Orchestrator:
         }
         await self._pm.write_pending_meta(meta_to_save)
 
-        if status in ("approved", "skipped_auto_approve", "skipped_no_chat", "send_failed"):
+        if status in ("approved", "skipped_auto_approve"):
             await self._pm.write_review_status(REVIEW_STATUS_APPROVED)
             await self._pm.clear_pending_state()
             try:
@@ -2217,7 +2247,7 @@ class Orchestrator:
             proj = await self._pm.load()
         except Exception as exc:
             logger.warning("交接校验：读取项目失败，跳过校验: %s", exc)
-            return True, ""
+            return False, f"读取项目失败: {exc}"
 
         if role_id == "strategist":
             if not (proj.brief_analysis or "").strip():

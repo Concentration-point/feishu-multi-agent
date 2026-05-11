@@ -6,7 +6,6 @@ tools:
   - read_project
   - list_content
   - write_content
-  - update_status
   - search_knowledge
   - read_knowledge
   - search_reference

@@ -284,15 +284,20 @@ async def execute(params: dict, context: AgentContext) -> str:
     status = result["status"]
     feedback = result.get("feedback", "")
 
-    if status in ("approved", "skipped_auto_approve", "skipped_no_chat"):
+    if status in ("approved", "skipped_auto_approve"):
         return _format_result("通过", feedback or "默认通过。")
     if status == "need_revise":
         return _format_result("需要修改", feedback)
-    if status == "timeout":
+    if status in ("timeout", "skipped_no_chat", "send_failed"):
         return (
             "人类审核超时：\n"
             f"状态：超时\n"
             f"说明：{feedback}\n\n"
             "请等待下一次人工触发该项目，数据已保留。"
         )
-    return _format_result("通过", feedback or "降级通过。")
+    return (
+        "人类审核未能确认通过：\n"
+        f"状态：{status or 'unknown'}\n"
+        f"说明：{feedback}\n\n"
+        "请等待下一次人工触发或重试人审。"
+    )
