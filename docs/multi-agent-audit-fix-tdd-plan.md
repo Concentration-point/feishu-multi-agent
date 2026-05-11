@@ -312,3 +312,38 @@ python -m pytest tests/test_orchestrator_red_flag.py tests/test_reviewer_rules.p
 4. 改动知识库目录结构。
 5. 大规模重构 Orchestrator 或 BaseAgent。
 
+## 集成验证补充
+
+本轮 TDD 安全修复合入 `codex/integration-tdd-safety-round-1` 后，目标测试通过：
+
+```bash
+python -m pytest tests/test_pipeline_red_flag_tdd.py tests/test_agent_required_tools_tdd.py tests/test_webhook_auth_tdd.py tests/test_webhook_dedup_tdd.py tests/test_status_authority_tdd.py tests/test_fail_closed_gates_tdd.py -q --tb=short
+```
+
+结果：`31 passed`。
+
+补充相关回归通过：
+
+```bash
+python -m pytest tests/test_orchestrator_red_flag.py tests/test_pipeline_red_flag_tdd.py tests/test_agent_required_tools_tdd.py tests/test_webhook_auth_tdd.py tests/test_webhook_dedup_tdd.py tests/test_status_authority_tdd.py tests/test_fail_closed_gates_tdd.py -q --tb=short
+```
+
+结果：`33 passed`。
+
+全量测试使用 worktree 内临时目录运行：
+
+```bash
+python -m pytest tests -q --tb=short --basetemp=.pytest_tmp
+```
+
+结果：`199 passed, 5 skipped, 7 failed`。
+
+剩余 7 个失败已在 `codex-tdd-audit-baseline` 对照复现，属于本轮修复前已存在的基线旧失败，不是本轮安全修复引入：
+
+1. `tests/agents/test_account_manager_agent.py::test_account_manager_soul_runs_with_explicit_input_context_strategy`
+2. `tests/agents/test_account_manager_agent.py::test_account_manager_can_call_ask_human_for_blocking_info`
+3. `tests/test_experience_optimization.py::test_optimize_bucket_merges_bucket_and_resets_use_count`
+4. `tests/test_pipeline_diagnosis_fixes.py::test_hidden_2_title_dedup_by_fingerprint`
+5. `tests/test_soul_audit_improvements.py::test_reviewer_still_gets_full_rules`
+6. `tests/test_soul_audit_improvements.py::test_all_roles_get_common_method_files`
+7. `tests/test_soul_audit_improvements.py::test_max_iterations_reduced`
