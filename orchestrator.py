@@ -21,6 +21,7 @@ from config import (
     REVIEW_MAX_RETRIES,
     STAGE_TIMEOUT_SECONDS,
     REVIEW_PASS_THRESHOLD_DEFAULT,
+    REVIEW_RED_FLAG_KEYWORDS,
     REVIEW_STATUS_APPROVED,
     REVIEW_STATUS_NEED_REVISE,
     REVIEW_STATUS_PENDING,
@@ -930,18 +931,21 @@ class Orchestrator:
         """
         pass_rate = await self._get_review_pass_rate()
         pass_rate = await self._reconcile_review_pass_rate(pass_rate)
+
+        review_red_flag = await self._collect_review_red_flag()
+        has_red_flag = self._is_review_red_flag(review_red_flag)
+        self._review_red_flag = review_red_flag.strip() if has_red_flag else "无"
+
+        if has_red_flag:
+            print(f"[Orchestrator] 警告: 审核结构化红线字段命中风险：{self._review_red_flag}，触发一票否决")
+            await self._hard_stop_reviewer_red_flag(pass_rate)
+            return
+
         if pass_rate is None:
             print("[Orchestrator] 警告: 无法读取审核通过率，跳过返工重试逻辑")
             return
 
-        review_red_flag = await self._get_review_red_flag()
-        has_red_flag = bool(review_red_flag and review_red_flag.strip() and review_red_flag.strip() != "无")
-        self._review_red_flag = review_red_flag.strip() if review_red_flag and review_red_flag.strip() else "无"
-
-        if has_red_flag:
-            print(f"[Orchestrator] 警告: 审核结构化红线字段命中风险：{self._review_red_flag}，触发一票否决")
-
-        if pass_rate >= self._review_threshold and not has_red_flag:
+        if pass_rate >= self._review_threshold:
             print(f"[Orchestrator] 审核通过率 {pass_rate:.0%}，达到阈值 {self._review_threshold:.0%}，且无红线风险，推进状态「审核中」→「排期中」")
             await self._write_auto_review_summary(pass_rate)
             try:
@@ -992,6 +996,50 @@ class Orchestrator:
             await self._pm.update_status("撰写中")
         except Exception as exc:
             print(f"[Orchestrator] 警告: 状态回退失败: {type(exc).__name__}: {exc}")
+
+    async def _hard_stop_reviewer_red_flag(self, pass_rate: float | None) -> None:
+        """红线命中后一票否决，并把风险写回项目主表供后续追踪。"""
+        safe_pass_rate = pass_rate if pass_rate is not None else 0.0
+        try:
+            proj = await self._pm.load()
+            existing_summary = (getattr(proj, "review_summary", "") or "").strip()
+            risk_line = f"红线命中，已硬中止：{self._review_red_flag}"
+            summary = existing_summary
+            if not summary:
+                summary = risk_line
+            elif self._review_red_flag not in summary:
+                summary = f"{summary}\n\n{risk_line}"
+
+            await self._pm.write_review_summary(
+                summary,
+                safe_pass_rate,
+                threshold=float(getattr(proj, "review_threshold", 0.0) or self._review_threshold),
+                red_flag=self._review_red_flag,
+            )
+        except Exception as exc:
+            logger.exception("写入红线硬中止风险标记失败")
+            print(f"[Orchestrator] 警告: 写入红线硬中止风险标记失败: {type(exc).__name__}: {exc}")
+
+        self._publish("pipeline.red_flag_halted", {
+            "pass_rate": safe_pass_rate,
+            "threshold": self._review_threshold,
+            "red_flag": self._review_red_flag,
+        }, agent_role="reviewer", agent_name="审核")
+
+        await self._broadcast(
+            title="审核命中红线，流程已中止",
+            content=(
+                f"通过率 **{safe_pass_rate:.0%}**，阈值 **{self._review_threshold:.0%}**\n"
+                f"红线风险：**{self._review_red_flag}**\n"
+                "项目已标记为已驳回，不再进入返工或排期。"
+            ),
+            color="red",
+        )
+
+        try:
+            await self._pm.update_status(STATUS_REJECTED)
+        except Exception as exc:
+            print(f"[Orchestrator] 警告: 红线硬中止状态写入失败: {type(exc).__name__}: {exc}")
 
     async def _write_auto_review_summary(self, pass_rate: float) -> None:
         """审核完成后，由 Orchestrator 自动聚合行级审核结果写入 review_summary。
@@ -1399,6 +1447,46 @@ class Orchestrator:
         except Exception as exc:
             logger.exception("获取审核红线风险失败")
             print(f"[Orchestrator] 警告: 获取审核红线风险失败: {type(exc).__name__}: {exc}")
+            return ""
+
+    @staticmethod
+    def _is_review_red_flag(value: str | None) -> bool:
+        """判断 review_red_flag 是否表达真实红线，而不是空值或否定信号。"""
+        normalized = (value or "").strip().lower()
+        if not normalized:
+            return False
+        return normalized not in {"无", "否", "false", "none", "null", "0", "未命中", "无红线", "无风险"}
+
+    async def _collect_review_red_flag(self) -> str:
+        """汇总项目级与内容行级红线，避免 submit_review 只写内容行时漏拦截。"""
+        project_flag = await self._get_review_red_flag()
+        if self._is_review_red_flag(project_flag):
+            return project_flag
+        return await self._get_row_level_review_red_flag()
+
+    async def _get_row_level_review_red_flag(self) -> str:
+        """从内容行审核反馈中提取红线关键词，作为项目级字段未同步时的兜底。"""
+        try:
+            project_name = await self._get_project_name()
+            if not project_name or project_name == "未知客户":
+                return ""
+
+            rows = await ContentMemory().list_by_project(project_name)
+            hits: list[str] = []
+            keywords = [*REVIEW_RED_FLAG_KEYWORDS, "红线", "广告法禁用词", "禁用词"]
+            for row in rows:
+                feedback = (getattr(row, "review_feedback", "") or "").strip()
+                if not feedback:
+                    continue
+                matched_keywords = [keyword for keyword in keywords if keyword and keyword in feedback]
+                if matched_keywords:
+                    title = (getattr(row, "title", "") or getattr(row, "record_id", "") or "未知内容").strip()
+                    hits.append(f"{title}：{', '.join(dict.fromkeys(matched_keywords))}")
+
+            return "；".join(hits)
+        except Exception as exc:
+            logger.exception("行级审核红线汇总失败")
+            print(f"[Orchestrator] 警告: 行级审核红线汇总失败: {type(exc).__name__}: {exc}")
             return ""
 
     async def _get_project_review_status(self) -> str:
