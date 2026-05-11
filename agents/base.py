@@ -1163,8 +1163,32 @@ class BaseAgent:
 
         if missing:
             logger.warning("[%s] post-validation 后仍缺少必调工具: %s", self.soul.name, missing)
-            final_output += (
-                f"\n\n⚠️ 合规警告：本次执行未调用必需工具 {missing}，输出可能未经必要审核流程。"
+            failure_output = (
+                f"{final_output}\n\n"
+                f"[REQUIRED_TOOL_MISSING] 必调工具缺失: {missing}"
+            ).strip()
+            self._messages = messages
+            self._publish("agent.failed", {
+                "reason": "required_tool_missing",
+                "missing_tools": missing,
+                "output_length": len(failure_output),
+            })
+            return AgentResult(
+                role_id=self.role_id,
+                output=failure_output,
+                messages=messages,
+                tool_calls=[],
+                missing_required_tools=missing,
+                meta={
+                    "mode": "react",
+                    "soul_name": self.soul.name,
+                    "record_id": self.record_id,
+                    "project_name": context.project_name,
+                    "required_tool_check": {
+                        "ok": False,
+                        "missing": missing,
+                    },
+                },
             )
 
         # 7. 保存对话历史供 Hook 使用

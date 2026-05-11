@@ -6,7 +6,7 @@ import logging
 import time
 from dataclasses import dataclass
 
-from agents.base import BaseAgent
+from agents.base import AgentResult, BaseAgent
 from config import (
     DELIVERY_DOC_ENABLED,
     EXPERIENCE_CONFIDENCE_THRESHOLD,
@@ -42,6 +42,49 @@ from memory.project import BriefProject, ContentMemory, ProjectMemory
 
 
 logger = logging.getLogger(__name__)
+
+
+def _detect_required_tool_failure(output, agent) -> tuple[bool, str, str]:
+    """识别 Agent 必调工具契约失败，返回 (是否失败, 错误信息, 可展示输出)。"""
+    output_text = ""
+    missing: list[str] = []
+    meta_check = None
+
+    if isinstance(output, AgentResult):
+        output_text = output.output or ""
+        missing = list(output.missing_required_tools or [])
+        meta = output.meta if isinstance(output.meta, dict) else {}
+        meta_check = meta.get("required_tool_check")
+        if isinstance(meta_check, dict):
+            meta_missing = meta_check.get("missing") or []
+            if isinstance(meta_missing, list):
+                missing.extend(str(item) for item in meta_missing if item)
+    else:
+        output_text = output or ""
+
+    agent_missing = getattr(agent, "missing_required_tools", None)
+    if isinstance(agent_missing, list):
+        missing.extend(str(item) for item in agent_missing if item)
+
+    missing = sorted(set(missing))
+    meta_failed = isinstance(meta_check, dict) and meta_check.get("ok") is False
+    raw_output = str(output_text)
+    lower_output = raw_output.lower()
+    warning_only_failed = (
+        "required_tool_missing" in lower_output
+        or "required tool" in lower_output
+        or ("必需工具" in raw_output and ("未调用" in raw_output or "缺失" in raw_output))
+        or ("必调工具" in raw_output and ("未调用" in raw_output or "缺失" in raw_output))
+    )
+
+    if missing or meta_failed or warning_only_failed:
+        if missing:
+            error = f"required tool violation: missing {', '.join(missing)}"
+        else:
+            error = "required tool violation: warning-only output was treated as failure"
+        return True, error, raw_output
+
+    return False, "", raw_output
 
 # ── 经验蒸馏 prompt（链路A：审核驳回反馈 → 文案/审核经验）──
 _DISTILL_PROMPT_CHAIN_A = (
@@ -586,10 +629,20 @@ class Orchestrator:
             agent = BaseAgent(role_id=role_id, record_id=self.record_id, event_bus=self._event_bus)
             output = await asyncio.wait_for(agent.run(), timeout=STAGE_TIMEOUT_SECONDS)
             duration = time.perf_counter() - start
+            failed, error, output_text = _detect_required_tool_failure(output, agent)
+            if failed:
+                print(f"[Orchestrator] 阶段 {role_id} 必调工具校验失败，耗时 {duration:.2f} 秒: {error}")
+                logger.error("阶段 %s 必调工具校验失败: %s", role_id, error)
+                return StageResult(
+                    role_id=role_id, ok=False, duration_sec=duration,
+                    output=output_text,
+                    error=error,
+                    used_ask_human=getattr(agent, '_used_ask_human', False),
+                ), agent
             print(f"[Orchestrator] 阶段 {role_id} 完成，耗时 {duration:.2f} 秒")
             return StageResult(
                 role_id=role_id, ok=True, duration_sec=duration,
-                output=output or "",
+                output=output_text,
                 used_ask_human=getattr(agent, '_used_ask_human', False),
             ), agent
         except asyncio.TimeoutError:
@@ -705,7 +758,10 @@ class Orchestrator:
             async with _sem:
                 try:
                     output = await agent.run()
-                    return (platform, output, agent, "")
+                    failed, error, output_text = _detect_required_tool_failure(output, agent)
+                    if failed:
+                        return (platform, output_text, agent, error)
+                    return (platform, output_text, agent, "")
                 except Exception as exc:
                     return (platform, None, agent, f"{type(exc).__name__}: {exc}")
 
@@ -732,9 +788,20 @@ class Orchestrator:
                 retry_agent = _make_agent(platform, groups[platform])
                 try:
                     retry_output = await retry_agent.run()
+                    failed, error, retry_output_text = _detect_required_tool_failure(retry_output, retry_agent)
+                    if failed:
+                        final_status[platform] = {
+                            "ok": False,
+                            "error": error,
+                            "output": retry_output_text,
+                            "agent": retry_agent,
+                            "retried": True,
+                        }
+                        print(f"[Orchestrator] platform={platform} 重试必调工具校验失败: {error}")
+                        continue
                     final_status[platform] = {
                         "ok": True,
-                        "output": retry_output or "",
+                        "output": retry_output_text,
                         "agent": retry_agent,
                         "retried": True,
                     }
