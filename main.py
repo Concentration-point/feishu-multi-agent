@@ -774,6 +774,36 @@ def _extract_record_id(event: dict[str, Any]) -> str | None:
     return None
 
 
+def _verify_webhook_token(payload: dict[str, Any]) -> None:
+    """校验飞书 webhook token；配置后缺失或错误都拒绝。"""
+    if not WEBHOOK_VERIFICATION_TOKEN:
+        return
+
+    header = payload.get("header", {})
+    token = payload.get("token") or header.get("token")
+    if token != WEBHOOK_VERIFICATION_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid verification token")
+
+
+def _extract_webhook_dedup_key(payload: dict[str, Any], record_id: str) -> str:
+    """生成事件级幂等键，避免同一 record_id 的后续合法事件被吞。"""
+    header = payload.get("header", {})
+    event_id = header.get("event_id") or payload.get("event_id")
+    if event_id:
+        return f"event:{event_id}"
+
+    event_time = (
+        header.get("create_time")
+        or header.get("timestamp")
+        or payload.get("create_time")
+        or payload.get("timestamp")
+    )
+    if event_time:
+        return f"record:{record_id}:time:{event_time}"
+
+    return f"record:{record_id}"
+
+
 async def _launch_pipeline(record_id: str) -> None:
     try:
         logger.info("[Webhook] start pipeline for %s", record_id)
@@ -812,9 +842,7 @@ async def webhook_event(request: Request):
 
     challenge = payload.get("challenge")
     if challenge:
-        token = payload.get("token") or payload.get("header", {}).get("token", "")
-        if WEBHOOK_VERIFICATION_TOKEN and token and token != WEBHOOK_VERIFICATION_TOKEN:
-            raise HTTPException(status_code=401, detail="invalid verification token")
+        _verify_webhook_token(payload)
         return JSONResponse({"challenge": challenge})
 
     header = payload.get("header", {})
@@ -822,18 +850,17 @@ async def webhook_event(request: Request):
     if "bitable.record.created" not in event_type and "record.created" not in event_type:
         raise HTTPException(status_code=400, detail="unsupported event type")
 
-    token = payload.get("token") or header.get("token", "")
-    if WEBHOOK_VERIFICATION_TOKEN and token and token != WEBHOOK_VERIFICATION_TOKEN:
-        raise HTTPException(status_code=401, detail="invalid verification token")
+    _verify_webhook_token(payload)
 
     record_id = _extract_record_id(payload)
     if not record_id:
         raise HTTPException(status_code=400, detail="record_id missing")
 
-    if record_id in _processed_record_ids:
+    dedup_key = _extract_webhook_dedup_key(payload, record_id)
+    if dedup_key in _processed_record_ids:
         return JSONResponse({"ok": True, "duplicate": True, "record_id": record_id})
 
-    _processed_record_ids.add(record_id)
+    _processed_record_ids.add(dedup_key)
     _track_task(_launch_pipeline(record_id))
     return JSONResponse({"ok": True, "record_id": record_id})
 
