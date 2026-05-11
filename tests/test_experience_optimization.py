@@ -126,6 +126,24 @@ async def test_optimize_bucket_merges_bucket_and_resets_use_count(local_tmp_dir,
         "_merged_confidence": 0.93,
     }])
 
+    class EmptyDedupStore:
+        def __init__(self):
+            self.added: list[tuple[str, str, dict]] = []
+
+        def query(self, query_text: str, role_id: str | None = None, k: int = 5) -> list[dict]:
+            return []
+
+        def add(self, id: str, document: str, metadata: dict) -> None:
+            self.added.append((id, document, metadata))
+
+        def delete(self, id: str) -> None:
+            raise AssertionError("本用例要求合并产物是新经验，不应触发语义去重删除")
+
+    dedup_store = EmptyDedupStore()
+    monkeypatch.setattr(exp_mod, "ExperienceVectorStore", lambda: dedup_store)
+
+    # 本用例契约：桶合并后产出一条真正需要写入的新经验，并重置 use_count。
+    # 语义去重跳过属于独立去重契约，不应由本合并路径用例断言。
     summary = await em.optimize_bucket("copywriter", "电商大促", "测试项目")
 
     assert summary["merged_deleted"] == 4
@@ -134,4 +152,5 @@ async def test_optimize_bucket_merges_bucket_and_resets_use_count(local_tmp_dir,
     fields = client.records[0]["fields"]
     assert fields[FE["confidence"]] == 0.93
     assert fields[FE["use_count"]] == 0
+    assert len(dedup_store.added) == 1
     assert (local_tmp_dir / WIKI_WRITE_SUBDIR / sanitize_name("电商大促")).exists()
