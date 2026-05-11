@@ -564,6 +564,29 @@ class BaseAgent:
             LLM_MAX_RETRIES,
         )
 
+    def _build_wiki_title(self, lesson: str) -> str:
+        """根据 lesson 文本生成稳定的 wiki 标题，用于经验沉淀去重。
+
+        归一化策略：去掉所有空白与中英文标点后小写化，再用 sha256 取前 8 位 hex
+        作为 fingerprint。仅标点差异的同语义 lesson 会得到相同 fingerprint，
+        从而合并到同一篇 wiki 文档；不同语义的 lesson 由 hash 区分。
+
+        返回格式：`<role_id>_<fingerprint8>`，便于不同角色经验互不串扰。
+        """
+        text = lesson or ""
+        # 1) 去掉所有空白字符
+        text = re.sub(r"\s+", "", text)
+        # 2) 去掉常见中英文标点（标点差异不应影响指纹）
+        punct_pattern = (
+            r"[,，;；:：()（）\[\]【】{}「」<>《》?？!！\"'`~～—\-_/\\."
+            r"。…、·^&%$#@*+=|]"
+        )
+        text = re.sub(punct_pattern, "", text)
+        # 3) 统一大小写
+        normalized = text.lower()
+        fingerprint = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:8]
+        return f"{self.role_id}_{fingerprint}"
+
     def _publish(self, event_type: str, payload: dict | None = None, *, round_num: int = 0) -> None:
         """安全发布事件到 EventBus，失败不影响主流程。
 
