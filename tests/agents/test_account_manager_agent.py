@@ -15,7 +15,7 @@ async def test_account_manager_soul_runs_with_explicit_input_context_strategy(
         [
             "加载 agents/account_manager/soul.md 作为具体客户经理 agent",
             "显式传入 input_data/strategy/context，不读取项目主表或流水线状态",
-            "mock LLM 第 1 轮要求调用 search_knowledge，第 2 轮返回 Brief analysis",
+            "mock LLM 第 1 轮要求调用 search_knowledge，第 2 轮声明 write_project，第 3 轮返回 Brief analysis",
             "验证工具上下文 record_id/project_name/role_id 和最终 AgentResult",
         ],
     )
@@ -64,8 +64,8 @@ async def test_account_manager_soul_runs_with_explicit_input_context_strategy(
     assert result.output == "Brief analysis ready"
     assert result.meta["mode"] == "unit"
     assert result.meta["project_name"] == "Launch Client"
-    # unit 模式只调了 search_knowledge，write_project 未调用（此场景只验证 search 路径）
-    assert result.missing_required_tools == ["write_project"]
+    # unit 模式应验证 LLM 声明的必调工具已被执行，因此 write_project 不应再被判为缺失。
+    assert result.missing_required_tools == []
     assert registry.calls == [
         {
             "tool_name": "search_knowledge",
@@ -73,7 +73,14 @@ async def test_account_manager_soul_runs_with_explicit_input_context_strategy(
             "record_id": "rec_am",
             "project_name": "Launch Client",
             "role_id": "account_manager",
-        }
+        },
+        {
+            "tool_name": "write_project",
+            "params": {"Brief解读": "Launch campaign analysis"},
+            "record_id": "rec_am",
+            "project_name": "Launch Client",
+            "role_id": "account_manager",
+        },
     ]
     first_messages = llm["calls"][0]["messages"]
     assert "deliverable" in first_messages[0]["content"]
@@ -89,7 +96,7 @@ async def test_account_manager_can_call_ask_human_for_blocking_info(
         "account_manager ask_human: blocking info path",
         [
             "构造一个缺少关键信息的 BBQ brief 场景",
-            "mock LLM 第 1 轮调用 ask_human，第 2 轮输出最终 Brief analysis",
+            "mock LLM 第 1 轮调用 ask_human，第 2 轮声明 write_project，第 3 轮输出最终 Brief analysis",
             "验证 ask_human 工具被真实调度，且 question / choices 参数完整透传",
         ],
     )
@@ -147,12 +154,16 @@ async def test_account_manager_can_call_ask_human_for_blocking_info(
     assert result.output == "Brief analysis ready with confirmed budget and platform."
     assert result.meta["mode"] == "unit"
     assert result.meta["project_name"] == "BBQ AskHuman"
-    # unit 模式只调了 ask_human，write_project 未调用（此场景只验证 ask_human 路径）
-    assert result.missing_required_tools == ["write_project"]
-    assert [call["tool_name"] for call in registry.calls] == ["ask_human"]
+    # unit 模式应验证阻塞信息确认后继续写回 Brief 解读，write_project 不应再被判为缺失。
+    assert result.missing_required_tools == []
+    assert [call["tool_name"] for call in registry.calls] == ["ask_human", "write_project"]
     assert registry.calls[0]["params"]["title"] == "需要确认缺失信息"
     assert "缺少预算和重点平台" in registry.calls[0]["params"]["question"]
     assert len(registry.calls[0]["params"]["choices"]) == 3
     assert registry.calls[0]["record_id"] == "rec_am_ask"
     assert registry.calls[0]["project_name"] == "BBQ AskHuman"
     assert registry.calls[0]["role_id"] == "account_manager"
+    assert registry.calls[1]["params"] == {"Brief解读": "烧烤店夜宵引流方案"}
+    assert registry.calls[1]["record_id"] == "rec_am_ask"
+    assert registry.calls[1]["project_name"] == "BBQ AskHuman"
+    assert registry.calls[1]["role_id"] == "account_manager"
