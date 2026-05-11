@@ -13,7 +13,7 @@ tools:
   - search_web
   - web_fetch
   - send_message
-max_iterations: 14
+max_iterations: 9
 verify:
   table: project
   check_fields: ["strategy"]

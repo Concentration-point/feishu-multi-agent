@@ -157,11 +157,6 @@ def test_hidden_2_title_dedup_by_fingerprint() -> list[str]:
 
     assert hasattr(experience_owner.ExperienceManager, "save_to_wiki")
     assert hasattr(experience_owner, "_lesson_fingerprint")
-    pytest.xfail(
-        "F3 owner 已迁移到 memory.experience.ExperienceManager；"
-        "当前生产代码没有 wiki title 指纹构建 owner，"
-        "测试先标记为明确红灯，等待生产契约补齐。"
-    )
 
     # 不依赖 LLM，直接用 BaseAgent._build_wiki_title 类方法
     # 但 _build_wiki_title 依赖 self.role_id，用一个最小桩

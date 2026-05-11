@@ -119,13 +119,6 @@ def test_data_analyst_tool_count_reduced():
 
 # ── max_iterations 验证 ──
 
-@pytest.mark.xfail(
-    reason=(
-        "F5 旧审计目标尚未确认仍是有效产品目标；本轮只校准测试语义，"
-        "不修改 agents/*/soul.md 生产配置。"
-    ),
-    strict=False,
-)
 def test_max_iterations_reduced():
     """旧审计目标：三个角色的 max_iterations 降低到建议值；待产品/架构确认。"""
     assert _load_soul("strategist").max_iterations == 9      # was 15
