@@ -53,6 +53,19 @@ def test_webhook_challenge_missing_token_rejected_when_token_configured(monkeypa
     assert response.status_code == 401
 
 
+def test_webhook_challenge_invalid_token_rejected_when_token_configured(monkeypatch):
+    """配置 webhook token 后，challenge token 错误也必须拒绝。"""
+    monkeypatch.setattr(app_main, "WEBHOOK_VERIFICATION_TOKEN", "expected-token")
+
+    payload = _challenge_payload()
+    payload["token"] = "wrong-token"
+
+    client = TestClient(app_main.app)
+    response = client.post("/webhook/event", json=payload)
+
+    assert response.status_code == 401
+
+
 def test_webhook_event_invalid_token_rejected(monkeypatch):
     """token 不匹配必须拒绝。"""
     monkeypatch.setattr(app_main, "WEBHOOK_VERIFICATION_TOKEN", "expected-token")
