@@ -69,7 +69,7 @@ git commit -F commit-message.txt
 
 其中 `commit-message.txt` 必须以 UTF-8 保存。
 
-2. 自动化重写历史时，使用 Python 或其他能明确写入 UTF-8 bytes 的脚本，把 message 通过 `stdin` 传给 Git。
+2. 自动化重写历史时，使用 Python、Node.js 或其他能明确写入 UTF-8 bytes 的脚本，把 message 通过 `stdin` 传给 Git。
 
 3. 重写后必须验证 Git 对象里的提交说明：
 
@@ -91,6 +91,28 @@ git diff --stat <rewrite-before-backup>..HEAD
 - 从未损坏的备份分支重新生成历史。
 - 使用 `git push --force-with-lease origin main` 推送，避免覆盖别人新提交。
 
+## 本地 Hook 固化
+
+本仓库提供版本化的提交说明校验：
+
+- `.githooks/commit-msg`
+- `scripts/validate_commit_message.py`
+
+每个 worktree 首次提交前都应启用：
+
+```powershell
+git config core.hooksPath .githooks
+```
+
+校验规则：
+
+1. commit 标题必须包含中文。
+2. commit 正文必须包含中文描述，写清原因、关键改动和验证结果。
+3. 禁止英文-only、无正文、连续 `????`、`æ–‡æ¡£` 这类 mojibake 乱码进入 Git 对象。
+4. 主 Agent 和子 Agent 都必须遵守同一规则；子 Agent 的任务提示词中也要明确这条要求。
+
+如果 hook 拦截提交，不要绕过 `--no-verify`，应重新生成 UTF-8 message 文件再提交。
+
 ## 禁止事项
 
 1. 不要提交英文-only 的 commit message。
@@ -98,3 +120,4 @@ git diff --stat <rewrite-before-backup>..HEAD
 3. 不要用 PowerShell 普通管道传中文 commit message。
 4. 不要在未创建备份分支时重写已推送历史。
 5. 不要把测试生成物、日志和临时目录混入提交。
+6. 不要用 `--no-verify` 绕过 commit message hook。
