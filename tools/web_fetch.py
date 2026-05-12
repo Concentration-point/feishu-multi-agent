@@ -39,6 +39,7 @@ from config import (
     WEB_FETCH_TIMEOUT_SECONDS,
     WEB_FETCH_USER_AGENT,
 )
+from infra.http_client import default_provider
 from tools import AgentContext
 
 logger = logging.getLogger(__name__)
@@ -452,12 +453,16 @@ async def _metaso_reader_fetch(url: str, prompt: str, max_tokens: int) -> dict:
         "Authorization": f"Bearer {METASO_API_KEY}",
     }
     try:
-        async with httpx.AsyncClient(timeout=timeout, http2=False) as client:
-            resp = await client.post(
-                f"{METASO_API_BASE}/reader",
-                json={"url": url},
-                headers=headers,
-            )
+        client = default_provider().get_client(
+            "metaso_reader",
+            timeout=timeout,
+            http2=False,
+        )
+        resp = await client.post(
+            f"{METASO_API_BASE}/reader",
+            json={"url": url},
+            headers=headers,
+        )
     except Exception as exc:
         logger.warning("秘塔 Reader 请求失败: %s", exc)
         return _error("request_failed", f"秘塔 Reader 请求失败: {type(exc).__name__}: {exc}", url=url, retryable=True)
@@ -572,19 +577,20 @@ async def execute(params: dict, context: AgentContext) -> dict:
         pool=5.0,
     )
     try:
-        async with httpx.AsyncClient(
+        client = default_provider().get_client(
+            "web_fetch",
             timeout=timeout,
             transport=transport,
             http2=False,
             headers={"User-Agent": WEB_FETCH_USER_AGENT},
-        ) as client:
-            robots_ok, robots_reason = await _robots_allowed(client, normalized_url)
-            if not robots_ok:
-                return _error("robots_blocked", robots_reason, url=normalized_url)
+        )
+        robots_ok, robots_reason = await _robots_allowed(client, normalized_url)
+        if not robots_ok:
+            return _error("robots_blocked", robots_reason, url=normalized_url)
 
-            resp, final_url, redirects, redirect_error = await _safe_get(client, normalized_url)
-            if redirect_error:
-                return redirect_error
+        resp, final_url, redirects, redirect_error = await _safe_get(client, normalized_url)
+        if redirect_error:
+            return redirect_error
     except httpx.TimeoutException:
         if METASO_API_KEY and _is_chinese_domain(normalized_url):
             logger.info("web_fetch: 超时，降级到秘塔 Reader (url=%s)", normalized_url[:80])

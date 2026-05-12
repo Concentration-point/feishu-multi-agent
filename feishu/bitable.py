@@ -15,6 +15,7 @@ import httpx
 
 from config import FEISHU_BASE_URL, BITABLE_APP_TOKEN
 from feishu.auth import TokenManager
+from infra.http_client import default_provider
 
 logger = logging.getLogger(__name__)
 
@@ -56,14 +57,19 @@ async def _bitable_client():
     """获取并发槽 + 带超时的 httpx client，统一解决两个 P0 问题：
     1. Semaphore 等待超过 BITABLE_SEM_TIMEOUT 时抛 FeishuAPIError，防进程挂死。
     2. httpx.AsyncClient 设置 BITABLE_HTTP_TIMEOUT，防单次请求永久阻塞。
+
+    httpx.AsyncClient 通过 HttpClientProvider 复用：进程内同一事件循环下
+    所有 Bitable 请求共享一个 client（连接池、TLS session 都能复用）；
+    pytest 切换 event loop 时 provider 会自动重建。
     """
     try:
         async with asyncio.timeout(BITABLE_SEM_TIMEOUT):
             async with _get_bitable_sem():
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(BITABLE_HTTP_TIMEOUT)
-                ) as client:
-                    yield client
+                client = default_provider().get_client(
+                    "feishu",
+                    timeout=httpx.Timeout(BITABLE_HTTP_TIMEOUT),
+                )
+                yield client
     except asyncio.TimeoutError:
         raise FeishuAPIError(
             -1,

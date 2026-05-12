@@ -69,6 +69,10 @@ async def lifespan(_app: FastAPI):
         await _stop_background_download()
         await _stop_background_sync()
 
+        # 关闭 HttpClientProvider 内所有复用的 AsyncClient，避免 ResourceWarning。
+        from infra.http_client import close_default_provider
+        await close_default_provider()
+
 
 app = FastAPI(title="multi-agent-feishu webhook", lifespan=lifespan)
 

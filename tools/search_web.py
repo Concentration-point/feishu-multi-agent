@@ -22,6 +22,7 @@ from config import (
     TAVILY_DEFAULT_MAX_RESULTS,
     TAVILY_TIMEOUT_SECONDS,
 )
+from infra.http_client import default_provider
 from tools import AgentContext
 
 logger = logging.getLogger(__name__)
@@ -181,12 +182,16 @@ async def _search_metaso(query: str, max_results: int, time_range: str | None = 
         "Authorization": f"Bearer {METASO_API_KEY}",
     }
     try:
-        async with httpx.AsyncClient(timeout=timeout, http2=False) as client:
-            resp = await client.post(
-                f"{METASO_API_BASE}/search",
-                json=payload,
-                headers=headers,
-            )
+        client = default_provider().get_client(
+            "metaso_search",
+            timeout=timeout,
+            http2=False,
+        )
+        resp = await client.post(
+            f"{METASO_API_BASE}/search",
+            json=payload,
+            headers=headers,
+        )
     except httpx.TimeoutException:
         return _error("timeout", "秘塔 API 请求超时", query=query, retryable=True)
     except Exception as exc:
@@ -307,12 +312,13 @@ async def execute(params: dict, context: AgentContext) -> dict:
         pool=5.0,
     )
     try:
-        async with httpx.AsyncClient(
+        client = default_provider().get_client(
+            "tavily",
             timeout=timeout,
             transport=transport,
             http2=False,
-        ) as client:
-            resp = await client.post(TAVILY_API_URL, json=payload)
+        )
+        resp = await client.post(TAVILY_API_URL, json=payload)
     except httpx.TimeoutException:
         return _error(
             "timeout",
