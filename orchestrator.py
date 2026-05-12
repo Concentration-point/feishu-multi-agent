@@ -431,7 +431,7 @@ class Orchestrator:
                 )
                 # 回写 Bitable 让运营侧可从表格感知失败（_safe_update 写失败仅 warn，不影响主流程）
                 ts = time.strftime("%m-%d %H:%M")
-                await self._pm.write_agent_error_log(
+                await self._safe_write_agent_error_log(
                     f"[{ts}][{role_id}] {result.error[:200]}"
                 )
 
@@ -687,6 +687,17 @@ class Orchestrator:
             print(f"[Orchestrator] 阶段 {role_id} 异常，耗时 {duration:.2f} 秒: {message}")
             logger.exception("阶段 %s 执行异常", role_id)
             return StageResult(role_id=role_id, ok=False, duration_sec=duration, error=message), None
+
+    async def _safe_write_agent_error_log(self, message: str) -> None:
+        """Best-effort error-log write; failures must not crash the pipeline."""
+        try:
+            writer = getattr(self._pm, "write_agent_error_log", None)
+            if writer is None:
+                logger.warning("ProjectMemory missing write_agent_error_log; skipping error log write")
+                return
+            await writer(message)
+        except Exception as exc:
+            logger.warning("Agent error log write failed; continuing pipeline: %s", exc)
 
     async def _run_copywriter_fanout(
         self,

@@ -5,6 +5,35 @@ from feishu.bitable import FeishuAPIError
 from tools import AgentContext
 from memory.project import ContentMemory, ContentItem
 
+
+STRATEGIST_PLATFORMS = {"小红书", "抖音"}
+PLATFORM_ALIASES = {
+    "短视频": "抖音",
+    "抖音脚本": "抖音",
+    "小红书笔记": "小红书",
+}
+
+
+def _normalize_content_item(raw: dict) -> tuple[dict | None, str | None]:
+    """Accept legacy LLM aliases while keeping the Bitable write contract strict."""
+    item = dict(raw or {})
+    if "sequence" not in item and "seq" in item:
+        item["sequence"] = item["seq"]
+    if "key_message" not in item and "key_point" in item:
+        item["key_message"] = item["key_point"]
+    if "platform" in item:
+        platform = (item.get("platform") or "").strip()
+        item["platform"] = PLATFORM_ALIASES.get(platform, platform)
+
+    missing = [
+        key
+        for key in ("title", "platform", "content_type", "key_message", "target_audience", "sequence")
+        if item.get(key) in (None, "")
+    ]
+    if missing:
+        return None, f"missing required fields: {', '.join(missing)}"
+    return item, None
+
 SCHEMA = {
     "type": "function",
     "function": {
@@ -46,9 +75,35 @@ SCHEMA = {
 
 
 async def execute(params: dict, context: AgentContext) -> str:
-    raw_items = params.get("items", [])
+    raw_items = params.get("items") or params.get("contents") or []
     if not raw_items:
         return "错误: items 不能为空"
+
+    normalized_items: list[dict] = []
+    item_errors: list[dict] = []
+    for idx, raw in enumerate(raw_items, 1):
+        item, error = _normalize_content_item(raw)
+        if error:
+            item_errors.append({"index": idx, "reason": error})
+            continue
+        assert item is not None
+        if context.role_id == "strategist" and item["platform"] not in STRATEGIST_PLATFORMS:
+            item_errors.append({
+                "index": idx,
+                "title": item.get("title", ""),
+                "reason": "strategist platform must be 小红书 or 抖音",
+                "platform": item["platform"],
+            })
+            continue
+        normalized_items.append(item)
+
+    if not normalized_items:
+        return json.dumps({
+            "message": "No content rows were created: all items failed validation.",
+            "record_ids": [],
+            "skipped_count": len(item_errors),
+            "skipped": item_errors[:10],
+        }, ensure_ascii=False)
 
     try:
         cm = ContentMemory()
@@ -64,7 +119,7 @@ async def execute(params: dict, context: AgentContext) -> str:
 
         kept: list[dict] = []
         skipped: list[dict] = []
-        for it in raw_items:
+        for it in normalized_items:
             title_norm = (it.get("title") or "").strip()
             if title_norm and title_norm in existing_titles:
                 skipped.append({"title": title_norm, "reason": "已存在同名内容行"})
@@ -79,11 +134,11 @@ async def execute(params: dict, context: AgentContext) -> str:
         if not kept:
             return json.dumps({
                 "message": (
-                    f"全部 {len(raw_items)} 条已存在，未创建新内容行。"
+                    f"全部 {len(normalized_items)} 条已存在，未创建新内容行。"
                     f"已有内容行 {len(existing)} 条，无需重复建仓。"
                 ),
-                "skipped_count": len(skipped),
-                "skipped": skipped[:10],
+                "skipped_count": len(skipped) + len(item_errors),
+                "skipped": (skipped + item_errors)[:10],
                 "existing_count": len(existing),
                 "record_ids": [],
             }, ensure_ascii=False)
@@ -104,13 +159,13 @@ async def execute(params: dict, context: AgentContext) -> str:
             context.project_name, content_items
         )
         msg = f"已批量创建 {len(record_ids)} 条内容行"
-        if skipped:
-            msg += f"，跳过 {len(skipped)} 条已存在/重复"
+        if skipped or item_errors:
+            msg += f"，跳过 {len(skipped) + len(item_errors)} 条已存在/重复/校验未通过"
         return json.dumps({
             "message": msg,
             "record_ids": record_ids,
-            "skipped_count": len(skipped),
-            "skipped": skipped[:10],
+            "skipped_count": len(skipped) + len(item_errors),
+            "skipped": (skipped + item_errors)[:10],
         }, ensure_ascii=False)
 
     except FeishuAPIError as exc:

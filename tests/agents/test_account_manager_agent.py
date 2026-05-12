@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from agents.base import load_soul_with_platform_patch
+
 from .conftest import FakeMessage, FakeToolRegistry, fake_response, make_agent, tool_call
 
 
@@ -167,3 +169,13 @@ async def test_account_manager_can_call_ask_human_for_blocking_info(
     assert registry.calls[1]["record_id"] == "rec_am_ask"
     assert registry.calls[1]["project_name"] == "BBQ AskHuman"
     assert registry.calls[1]["role_id"] == "account_manager"
+
+
+def test_account_manager_tool_whitelist_excludes_content_creation():
+    soul, _ = load_soul_with_platform_patch("account_manager", None)
+
+    assert "ask_human" in soul.tools
+    assert "ask_human_batch" in soul.tools
+    assert "create_content" not in soul.tools
+    assert "batch_create_content" not in soul.tools
+    assert soul.max_iterations == 18

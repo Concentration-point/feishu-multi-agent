@@ -29,6 +29,7 @@ class FakeBitableClient:
         self.records = records or []
         self.deleted: list[str] = []
         self.created: list[dict] = []
+        self.updated: list[tuple[str, dict]] = []
 
     async def list_records(self, table_id: str, filter_expr: str | None = None):
         return list(self.records)
@@ -43,6 +44,35 @@ class FakeBitableClient:
         self.created.append(record)
         self.records.append(record)
         return record_id
+
+    async def update_record(self, table_id: str, record_id: str, fields: dict) -> None:
+        self.updated.append((record_id, fields))
+        for record in self.records:
+            if record["record_id"] == record_id:
+                record["fields"].update(fields)
+
+    async def batch_get_records(self, table_id: str, record_ids: list[str]) -> dict:
+        return {
+            record["record_id"]: record["fields"]
+            for record in self.records
+            if record["record_id"] in record_ids
+        }
+
+
+class TrackingStore:
+    def __init__(self, query_results: list[dict] | None = None):
+        self.query_results = query_results or []
+        self.added: list[tuple[str, str, dict]] = []
+        self.deleted: list[str] = []
+
+    def query(self, query_text: str, role_id: str | None = None, k: int = 5) -> list[dict]:
+        return list(self.query_results[:k])
+
+    def add(self, id: str, document: str, metadata: dict) -> None:
+        self.added.append((id, document, metadata))
+
+    def delete(self, id: str) -> None:
+        self.deleted.append(id)
 
 
 def make_record(record_id: str, lesson: str, confidence: float, title: str | None = None) -> dict:
@@ -81,6 +111,8 @@ async def test_optimize_bucket_deduplicates_and_deletes_local_wiki(local_tmp_dir
     client = FakeBitableClient([low, high])
     em = ExperienceManager(client=client)
     em._table_id = "tbl_test"
+    store = TrackingStore()
+    monkeypatch.setattr(exp_mod, "ExperienceVectorStore", lambda: store)
 
     payload = json.loads(low["fields"][FE["content"]])
     category_dir = local_tmp_dir / WIKI_WRITE_SUBDIR / sanitize_name("电商大促")
@@ -96,6 +128,7 @@ async def test_optimize_bucket_deduplicates_and_deletes_local_wiki(local_tmp_dir
 
     assert summary["dedup_deleted"] == 1
     assert client.deleted == ["rec_low"]
+    assert store.deleted == ["rec_low"]
     assert [r["record_id"] for r in client.records] == ["rec_high"]
     assert not wiki_file.exists()
 
@@ -126,20 +159,7 @@ async def test_optimize_bucket_merges_bucket_and_resets_use_count(local_tmp_dir,
         "_merged_confidence": 0.93,
     }])
 
-    class EmptyDedupStore:
-        def __init__(self):
-            self.added: list[tuple[str, str, dict]] = []
-
-        def query(self, query_text: str, role_id: str | None = None, k: int = 5) -> list[dict]:
-            return []
-
-        def add(self, id: str, document: str, metadata: dict) -> None:
-            self.added.append((id, document, metadata))
-
-        def delete(self, id: str) -> None:
-            raise AssertionError("本用例要求合并产物是新经验，不应触发语义去重删除")
-
-    dedup_store = EmptyDedupStore()
+    dedup_store = TrackingStore()
     monkeypatch.setattr(exp_mod, "ExperienceVectorStore", lambda: dedup_store)
 
     # 本用例契约：桶合并后产出一条真正需要写入的新经验，并重置 use_count。
@@ -154,3 +174,72 @@ async def test_optimize_bucket_merges_bucket_and_resets_use_count(local_tmp_dir,
     assert fields[FE["use_count"]] == 0
     assert len(dedup_store.added) == 1
     assert (local_tmp_dir / WIKI_WRITE_SUBDIR / sanitize_name("电商大促")).exists()
+
+
+@pytest.mark.asyncio
+async def test_save_experience_also_writes_local_wiki(local_tmp_dir, monkeypatch):
+    monkeypatch.setattr(exp_mod, "KNOWLEDGE_BASE_PATH", str(local_tmp_dir))
+    store = TrackingStore()
+    monkeypatch.setattr(exp_mod, "ExperienceVectorStore", lambda: store)
+
+    client = FakeBitableClient()
+    em = ExperienceManager(client=client)
+    em._table_id = "tbl_test"
+    card = {
+        "situation": "审核电商大促内容时发现广告法风险词",
+        "action": "先对照禁用词表逐条检查，再标注替代表达",
+        "outcome": "审核一次通过且没有平台限流风险",
+        "lesson": "审核前必须先检查广告法禁用词，并给出可替代表达，避免文案反复返工",
+        "category": "电商大促",
+        "applicable_roles": ["reviewer", "copywriter"],
+        "title": "广告法禁用词处理",
+    }
+
+    record_id = await em.save_experience(card, 0.86, "测试项目")
+
+    assert record_id == "rec_new_1"
+    assert len(store.added) == 2
+    wiki_dir = local_tmp_dir / WIKI_WRITE_SUBDIR / sanitize_name("电商大促")
+    files = list(wiki_dir.glob("*.md"))
+    assert len(files) == 1
+    content = files[0].read_text(encoding="utf-8")
+    assert "applicable_roles" in content or "reviewer, copywriter" in content
+    assert "## 经验教训" in content
+
+
+@pytest.mark.asyncio
+async def test_query_top_k_falls_back_to_chroma_metadata_when_bitable_batch_fails(monkeypatch):
+    from config import EXPERIENCE_CONFIDENCE_THRESHOLD
+
+    class FailingBatchClient(FakeBitableClient):
+        async def batch_get_records(self, table_id: str, record_ids: list[str]) -> dict:
+            raise RuntimeError("bitable down")
+
+    payload = {
+        "situation": "新品发布策略复盘",
+        "action": "先拆目标人群再安排平台",
+        "outcome": "发布节奏稳定",
+        "lesson": "新品发布必须先拆目标人群再排平台节奏，避免所有内容堆同一天",
+    }
+    store = TrackingStore(query_results=[{
+        "id": "rec_meta",
+        "document": json.dumps(payload, ensure_ascii=False),
+        "metadata": {
+            "role_id": "strategist",
+            "category": "新品发布",
+            "confidence": EXPERIENCE_CONFIDENCE_THRESHOLD + 0.1,
+            "use_count": 3,
+        },
+        "distance": 0.2,
+    }])
+    monkeypatch.setattr(exp_mod, "ExperienceVectorStore", lambda: store)
+
+    em = ExperienceManager(client=FailingBatchClient())
+    em._table_id = "tbl_test"
+    results = await em.query_top_k("strategist", "新品发布", k=5)
+
+    assert len(results) == 1
+    assert results[0]["record_id"] == "rec_meta"
+    assert results[0]["confidence"] == EXPERIENCE_CONFIDENCE_THRESHOLD + 0.1
+    assert results[0]["use_count"] == 3
+    assert em._client.updated == [("rec_meta", {FE["use_count"]: 4})]

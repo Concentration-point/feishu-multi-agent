@@ -3,6 +3,25 @@
 from tools import AgentContext
 from memory.project import ContentMemory, ContentItem
 
+STRATEGIST_PLATFORMS = {"小红书", "抖音"}
+PLATFORM_ALIASES = {
+    "短视频": "抖音",
+    "抖音脚本": "抖音",
+    "小红书笔记": "小红书",
+}
+
+
+def _normalize_params(params: dict) -> dict:
+    item = dict(params or {})
+    if "sequence" not in item and "seq" in item:
+        item["sequence"] = item["seq"]
+    if "key_message" not in item and "key_point" in item:
+        item["key_message"] = item["key_point"]
+    if "platform" in item:
+        platform = (item.get("platform") or "").strip()
+        item["platform"] = PLATFORM_ALIASES.get(platform, platform)
+    return item
+
 SCHEMA = {
     "type": "function",
     "function": {
@@ -46,6 +65,10 @@ SCHEMA = {
 
 
 async def execute(params: dict, context: AgentContext) -> str:
+    params = _normalize_params(params)
+    if context.role_id == "strategist" and params.get("platform") not in STRATEGIST_PLATFORMS:
+        return "错误: strategist 只能创建小红书或抖音内容行"
+
     item = ContentItem(
         seq=params["sequence"],
         title=params["title"],

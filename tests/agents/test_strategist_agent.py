@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from agents.base import load_soul_with_platform_patch
+
 from .conftest import FakeMessage, FakeToolRegistry, fake_response, make_agent, tool_call
 
 
@@ -176,3 +178,15 @@ async def test_strategist_soul_loads_with_only_internal_research(
         "batch_create_content", "write_project", "update_status",
     }
     assert [c["tool_name"] for c in registry.calls] == ["search_knowledge"]
+
+
+def test_strategist_tool_whitelist_and_platform_policy():
+    soul, _ = load_soul_with_platform_patch("strategist", None)
+
+    assert "batch_create_content" in soul.tools
+    assert "ask_human" not in soul.tools
+    assert "ask_human_batch" not in soul.tools
+    assert soul.max_iterations == 9
+    assert "小红书" in soul.body
+    assert "抖音" in soul.body
+    assert "key_message" in soul.body

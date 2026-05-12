@@ -43,6 +43,10 @@ SCHEMA = {
                     "type": "string",
                     "description": "审核反馈（需修改/驳回时必须非空，具体说明问题和修改建议）",
                 },
+                "review_red_flag": {
+                    "type": "string",
+                    "description": "Optional structured red-flag signal. Use empty/none when no hard-stop risk is found.",
+                },
                 "violated_rules": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -87,11 +91,46 @@ SCHEMA = {
 }
 
 
+_NO_RED_FLAG_SIGNALS = {
+    "",
+    "无",
+    "無",
+    "否",
+    "否定",
+    "未发现",
+    "未發現",
+    "不触发",
+    "不觸發",
+    "none",
+    "no",
+    "false",
+    "n/a",
+    "na",
+}
+
+
+def _is_red_flag_signal(value: str | None) -> bool:
+    normalized = (value or "").strip()
+    if not normalized:
+        return False
+    return normalized.lower() not in _NO_RED_FLAG_SIGNALS
+
+
+def _merge_red_flag_feedback(feedback: str, red_flag: str) -> str:
+    if not _is_red_flag_signal(red_flag):
+        return feedback
+    marker = f"review_red_flag: {red_flag.strip()}"
+    if marker in feedback:
+        return feedback
+    return f"{feedback}\n{marker}".strip()
+
+
 async def execute(params: dict, context: AgentContext) -> str:
     rid = params.get("content_record_id", "")
     status = params.get("status", "")
     feedback = (params.get("feedback") or "").strip()
     dimensions: dict = params.get("dimensions") or {}
+    review_red_flag = (params.get("review_red_flag") or "").strip()
 
     # ── 基础参数校验 ──
     if not rid:
@@ -127,13 +166,21 @@ async def execute(params: dict, context: AgentContext) -> str:
         )
 
     # ── 反馈非空校验 ──
+    if _is_red_flag_signal(review_red_flag) and status == _VALID_STATUSES[0]:
+        return (
+            "错误: review_red_flag 已命中真实红线，"
+            "status 不能为「通过」，请改为「驳回」或「需修改」。"
+        )
+
     if status in ("需修改", "驳回") and not feedback:
         return f"错误: status 为「{status}」时 feedback 不能为空，请填写具体的问题描述和修改建议。"
 
     # ── 写入 Bitable ──
+    feedback_to_write = _merge_red_flag_feedback(feedback, review_red_flag)
+
     try:
         cm = ContentMemory()
-        await cm.write_review(rid, status, feedback)
+        await cm.write_review(rid, status, feedback_to_write)
 
         dim_summary = "、".join(
             f"{d}:{'✓' if dimensions.get(d) == '通过' else '✗'}"
@@ -147,6 +194,7 @@ async def execute(params: dict, context: AgentContext) -> str:
         return (
             f"审核结论已写回: status={status}，维度=[{dim_summary}]"
             + (f"，命中规则={violated_rules}" if violated_rules else "")
+            + (f" review_red_flag={review_red_flag}" if _is_red_flag_signal(review_red_flag) else "")
         )
     except FeishuAPIError as exc:
         return f"飞书API错误（code={exc.code}）: {exc.msg}"

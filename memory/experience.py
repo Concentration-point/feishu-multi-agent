@@ -217,11 +217,13 @@ class ExperienceManager:
     async def save_experience(
         self, card: dict, confidence: float, project_name: str,
         _skip_auto_optimize: bool = False,
+        _skip_wiki: bool = False,
     ) -> str | None:
         """将经验卡片双写到 Bitable 经验池表和 Chroma 向量库，返回 record_id。
 
         两个写入独立：任一失败只打 warning，不影响另一个。
         _skip_auto_optimize=True 由 optimize_bucket 内部调用时传入，防止递归触发。
+        _skip_wiki=True 由已显式写 wiki 的内部流程传入，避免重复落盘。
         """
         ok, reason = _is_card_quality_ok(card)
         if not ok:
@@ -332,6 +334,12 @@ class ExperienceManager:
             except Exception as e:
                 logger.warning("经验写入 Chroma 失败: role=%s err=%s", role, e)
 
+        if not _skip_wiki:
+            try:
+                await self.save_to_wiki(card, confidence)
+            except Exception as exc:
+                logger.warning("经验写入本地 Wiki 失败: %s", exc)
+
         # 写入成功后检查桶大小，超限自动触发合并（_skip_auto_optimize 防止 optimize_bucket 内递归）
         if not _skip_auto_optimize and record_ids and self._table_configured:
             for role in {r for r in roles if r}:
@@ -427,7 +435,11 @@ class ExperienceManager:
 
         bitable_records: dict[str, dict] = {}
         if self._table_configured and bitable_ids:
-            bitable_records = await self._client.batch_get_records(self._table_id, bitable_ids)
+            try:
+                bitable_records = await self._client.batch_get_records(self._table_id, bitable_ids)
+            except Exception as exc:
+                logger.warning("经验池 Bitable 批量读取失败，回落到 Chroma metadata: %s", exc)
+                bitable_records = {}
 
         # 第三步：合并数据，过滤 status=禁用
         filtered: list[dict] = []
@@ -609,6 +621,11 @@ class ExperienceManager:
         record_id = record.get("record_id", "")
         deleted_bitable = False
         if record_id:
+            try:
+                ExperienceVectorStore().delete(record_id)
+            except Exception as exc:
+                logger.warning("删除旧经验 Chroma 记录失败: %s err=%s", record_id, exc)
+
             try:
                 await self._client.delete_record(self._table_id, record_id)
                 deleted_bitable = True
@@ -828,7 +845,13 @@ class ExperienceManager:
 
         for card in merged_cards:
             confidence = _safe_float(card.pop("_merged_confidence", max_confidence))
-            await self.save_experience(card, confidence, project_name or "经验优化", _skip_auto_optimize=True)
+            await self.save_experience(
+                card,
+                confidence,
+                project_name or "经验优化",
+                _skip_auto_optimize=True,
+                _skip_wiki=True,
+            )
             await self.save_to_wiki(card, confidence)
             summary["merged_created"] += 1
 
@@ -918,4 +941,3 @@ class ExperienceManager:
         except Exception as e:
             logger.warning("经验合并失败: %s", e)
             return None
-
