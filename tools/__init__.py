@@ -23,13 +23,29 @@ _STATS_FILE = _PROJECT_ROOT / "logs" / "tool_calls.jsonl"
 
 
 def _write_stat(record: dict) -> None:
-    """追加一条工具调用记录到全局持久日志（跨运行累积，不清空）。"""
+    """追加一条工具调用记录到全局持久日志（跨运行累积，不清空）。
+
+    JSONL 始终写入；若 TOOL_STATS_SQLITE_PATH 环境变量非空，则并行写入 SQLite sink。
+    任何一路失败都不会阻断主流程。
+    """
+    record.setdefault("ts", datetime.now(timezone.utc).isoformat())
+
+    # JSONL 写入（默认行为，保持兼容）
     try:
         _STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        record.setdefault("ts", datetime.now(timezone.utc).isoformat())
         with _STATS_FILE.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
+        pass
+
+    # SQLite sink（可选，环境变量驱动 lazy init）
+    try:
+        from tools.tool_stats_store import get_store
+        store = get_store()
+        if store is not None:
+            store.record(record)
+    except Exception:
+        # 兜底防御：任何异常都不应影响主流程
         pass
 
 
